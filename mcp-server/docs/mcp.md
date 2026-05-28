@@ -3,7 +3,7 @@
 Local stdio MCP server entrypoint:
 
 ```bash
-cd /Users/2an/Documents/Github/hackathon-2026
+cd mcp-server
 source .venv/bin/activate
 python mcp_server/server.py
 ```
@@ -13,10 +13,10 @@ Hermes config example:
 ```yaml
 mcp_servers:
   hackathon_2026_transport:
-    command: "/Users/2an/Documents/Github/hackathon-2026/.venv/bin/python"
-    args: ["/Users/2an/Documents/Github/hackathon-2026/mcp_server/server.py"]
+    command: "/path/to/repo/mcp-server/.venv/bin/python"
+    args: ["/path/to/repo/mcp-server/mcp_server/server.py"]
     env:
-      TRANSPORT_DB_PATH: "/Users/2an/Documents/Github/hackathon-2026/data/processed/transport.duckdb"
+      TRANSPORT_DB_PATH: "/path/to/repo/mcp-server/data/processed/transport.duckdb"
     timeout: 120
     connect_timeout: 30
 ```
@@ -51,3 +51,5 @@ For human-facing answers, prefer trip-level delay metrics from `explain_trip_del
 - `avg_max_delay_per_trip_minutes`: typical worst delay reached by a trip.
 - `trips_delayed_3min` and `trips_delayed_5min`: easy reliability counts.
 - `total_stop_delay_minutes`: every delayed stop counted separately; useful as system burden, but not intuitive for users.
+
+Security note: read-only DuckDB connections disable external access, and the ad-hoc SQL tool accepts only a single SELECT statement with blocked write/DDL keywords.

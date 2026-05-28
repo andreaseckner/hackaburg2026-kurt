@@ -80,24 +80,22 @@ def ingest_csv(con: duckdb.DuckDBPyConnection, path: Path) -> tuple[str, int, st
     encoding = detect_encoding(path)
     delimiter = detect_delimiter(path, encoding)
     quoted_table = quote_identifier(table_name)
-    delim_sql = delimiter.replace("'", "''")
-
     with utf8_csv_path(path, encoding) as readable_path:
-        path_sql = str(readable_path).replace("'", "''")
         con.execute(f"DROP TABLE IF EXISTS {quoted_table}")
         con.execute(
             f"""
             CREATE TABLE {quoted_table} AS
             SELECT *
             FROM read_csv_auto(
-                '{path_sql}',
-                delim='{delim_sql}',
+                ?,
+                delim=?,
                 header=true,
                 sample_size=-1,
                 ignore_errors=true,
                 normalize_names=true
             )
-            """
+            """,
+            [str(readable_path), delimiter],
         )
     row_count = con.execute(f"SELECT COUNT(*) FROM {quoted_table}").fetchone()[0]
     return table_name, int(row_count), encoding, delimiter

@@ -62,8 +62,18 @@ def run_readonly_sql(sql: str, db_path: str | None = None, limit: int = 100) -> 
     if _WRITE_SQL.search(normalized):
         raise ValueError("SQL contains a blocked keyword")
 
-    limited_sql = f"SELECT * FROM ({normalized}) AS readonly_query LIMIT ?"
-    return _query(db_path, limited_sql, [limit])
+    limit = _limit(limit, maximum=500)
+    with connect(db_path) as con:
+        try:
+            statements = con.extract_statements(normalized)
+        except Exception as exc:
+            raise ValueError(f"Invalid SQL: {exc}") from exc
+        if len(statements) != 1:
+            raise ValueError("Only a single SQL statement is allowed")
+
+        limited_sql = f"SELECT * FROM ({normalized}) AS readonly_query LIMIT ?"
+        result = con.execute(limited_sql, [limit])
+        return _rows_as_dicts(result)
 
 
 def raw_table_overview(db_path: str | None = None) -> list[dict[str, Any]]:

@@ -20,4 +20,5 @@ def resolve_db_path(db_path: str | os.PathLike[str] | None = None) -> Path:
 
 def connect(db_path: str | os.PathLike[str] | None = None, *, read_only: bool = True) -> duckdb.DuckDBPyConnection:
     path = resolve_db_path(db_path)
-    return duckdb.connect(str(path), read_only=read_only)
+    config = {"enable_external_access": "false"} if read_only else {}
+    return duckdb.connect(str(path), read_only=read_only, config=config)

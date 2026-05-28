@@ -1,6 +1,6 @@
 # Hackathon 2026 Transport Intelligence
 
-Minimal first version for ingesting CSV bus data into DuckDB and exposing it to analytics/MCP code.
+Minimal first version for ingesting CSV bus data into DuckDB and exposing transport reliability analytics via MCP.
 
 ## Database choice
 
@@ -18,16 +18,20 @@ Raw CSV input folder:
 data/raw
 ```
 
+Raw CSVs and generated database files are intentionally ignored by git.
+
 ## Setup
 
+Run these commands from the repository root:
+
 ```bash
-cd /Users/2an/Documents/Github/hackathon-2026
-/opt/homebrew/bin/python3.12 -m venv .venv
+cd mcp-server
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Note: MCP requires a newer Python than macOS system Python 3.9. Use Python 3.12 here.
+Note: MCP requires a newer Python than macOS system Python 3.9. Use Python 3.12+ if your system Python cannot install the `mcp` package.
 
 ## Ingest data
 
@@ -47,6 +51,7 @@ Ingest into DuckDB:
 
 ```bash
 python scripts/ingest_csvs.py data/raw data/processed/transport.duckdb
+python scripts/create_views.py data/processed/transport.duckdb
 ```
 
 ## Current approach
@@ -57,13 +62,4 @@ Phase 1 creates raw DuckDB tables named after CSV files, e.g.:
 raw_some_file_name
 ```
 
-This avoids guessing the final schema before we inspect the real CSV columns.
-
-After inspection, create derived analytics tables/views such as:
-
-```text
-stop_events
-daily_delay_metrics
-line_delay_metrics
-stop_delay_metrics
-```
+This avoids guessing the final schema before inspecting the real CSV columns. Derived analytics views then normalize stop-level delay events and daily metrics for MCP tools.

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
+import duckdb
+import pytest
+
 from core.analytics import (
     compare_directions,
     get_bottleneck_stops,
@@ -11,30 +14,86 @@ from core.analytics import (
     get_early_departures,
     get_trip_delay_summary,
     get_worst_stops,
+    run_readonly_sql,
 )
 
-DB_PATH = "data/processed/transport.duckdb"
+
+@pytest.fixture()
+def db_path(tmp_path):
+    path = tmp_path / "transport.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute(
+        """
+        CREATE TABLE daily_delay_metrics AS
+        SELECT * FROM (VALUES
+            (DATE '2024-12-12', 'Thursday', 1, 6, 12.0, 120.0, 3, 1),
+            (DATE '2024-12-13', 'Friday', 1, 4, 6.0, 90.0, 1, 2)
+        ) AS t(
+            service_date,
+            weekday_name,
+            line_id,
+            event_count,
+            total_positive_delay_minutes,
+            avg_positive_delay_seconds,
+            delayed_3min_events,
+            early_1min_events
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE departure_delay_events AS
+        SELECT * FROM (VALUES
+            (DATE '2024-12-12', 4, 8, 1, 'Start A', 'A', 'A1',  60.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:00:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 8, 1, 'Middle',  'M', 'M1', 240.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:10:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 8, 1, 'End B',   'B', 'B1', 180.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:20:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 9, 1, 'End B',   'B', 'B1', -90.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:00:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-12', 4, 9, 1, 'Middle',  'M', 'M1', 120.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:10:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-12', 4, 9, 1, 'Start A', 'A', 'A1', 300.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:20:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-13', 5, 10, 1, 'Start A', 'A', 'A1', 30.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:00:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-13', 5, 10, 1, 'End B',   'B', 'B1', 90.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:20:00', 'Start A', 'A', 'End B', 'B')
+        ) AS t(
+            service_date,
+            weekday_number,
+            planned_departure_hour,
+            line_id,
+            stop_name,
+            stop_code,
+            stop_point,
+            departure_delay_seconds,
+            direction_id,
+            run_id,
+            planned_departure,
+            route_start,
+            route_start_code,
+            route_end,
+            route_end_code
+        )
+        """
+    )
+    con.close()
+    return str(path)
 
 
-def test_get_days_with_most_delays_returns_ranked_days():
-    rows = get_days_with_most_delays(DB_PATH, limit=3)
+def test_get_days_with_most_delays_returns_ranked_days(db_path):
+    rows = get_days_with_most_delays(db_path, limit=2)
 
-    assert len(rows) == 3
+    assert len(rows) == 2
     assert rows[0]["service_date"] == date(2024, 12, 12)
     assert rows[0]["total_delay_minutes"] >= rows[1]["total_delay_minutes"]
     assert rows[0]["line_id"] == 1
 
 
-def test_get_delays_by_weekday_returns_weekday_metrics_sorted_by_delay():
-    rows = get_delays_by_weekday(DB_PATH)
+def test_get_delays_by_weekday_returns_weekday_metrics_sorted_by_delay(db_path):
+    rows = get_delays_by_weekday(db_path)
 
     assert rows
     assert {"weekday_name", "event_count", "total_delay_minutes", "delayed_3min_events"} <= rows[0].keys()
     assert rows[0]["total_delay_minutes"] >= rows[-1]["total_delay_minutes"]
 
 
-def test_get_delays_by_hour_returns_24_hour_buckets():
-    rows = get_delays_by_hour(DB_PATH)
+def test_get_delays_by_hour_returns_hour_buckets(db_path):
+    rows = get_delays_by_hour(db_path)
 
     hours = {row["hour"] for row in rows}
     assert min(hours) >= 0
@@ -42,43 +101,57 @@ def test_get_delays_by_hour_returns_24_hour_buckets():
     assert {"hour", "event_count", "total_delay_minutes", "avg_delay_seconds"} <= rows[0].keys()
 
 
-def test_get_worst_stops_returns_stop_delay_hotspots():
-    rows = get_worst_stops(DB_PATH, limit=5)
+def test_get_worst_stops_returns_stop_delay_hotspots(db_path):
+    rows = get_worst_stops(db_path, limit=2)
 
-    assert len(rows) == 5
+    assert len(rows) == 2
     assert rows[0]["stop_name"]
     assert rows[0]["total_delay_minutes"] >= rows[1]["total_delay_minutes"]
     assert "delayed_3min_events" in rows[0]
 
 
-def test_get_early_departures_returns_early_departure_hotspots():
-    rows = get_early_departures(DB_PATH, limit=5)
+def test_get_early_departures_returns_early_departure_hotspots(db_path):
+    rows = get_early_departures(db_path, limit=2)
 
-    assert len(rows) == 5
-    assert rows[0]["early_1min_events"] >= rows[1]["early_1min_events"]
+    assert rows
+    assert rows[0]["early_1min_events"] > 0
     assert rows[0]["avg_early_seconds"] > 0
 
 
-def test_get_bottleneck_stops_returns_delay_growth_hotspots():
-    rows = get_bottleneck_stops(DB_PATH, limit=5)
+def test_get_bottleneck_stops_returns_delay_growth_hotspots(db_path):
+    rows = get_bottleneck_stops(db_path, limit=2)
 
-    assert len(rows) == 5
+    assert rows
     assert rows[0]["stop_name"]
-    assert rows[0]["avg_delay_growth_seconds"] >= rows[1]["avg_delay_growth_seconds"]
+    assert rows[0]["avg_delay_growth_seconds"] >= rows[-1]["avg_delay_growth_seconds"]
 
 
+def test_compare_directions_returns_direction_level_metrics(db_path):
+    rows = compare_directions(db_path)
+
+    assert rows
+    assert {"direction_id", "route_start", "route_end", "total_delay_minutes"} <= rows[0].keys()
 
 
-def test_get_trip_delay_summary_returns_user_friendly_trip_metrics():
-    summary = get_trip_delay_summary(DB_PATH, service_date="2024-12-12")
+def test_get_trip_delay_summary_returns_user_friendly_trip_metrics(db_path):
+    summary = get_trip_delay_summary(db_path, service_date="2024-12-12")
 
     assert summary["service_date"] == date(2024, 12, 12)
-    assert summary["approx_trips"] == 190
-    assert summary["total_trip_delay_minutes"] == 969.0
-    assert summary["total_trip_delay_hours"] == 16.15
-    assert summary["avg_max_delay_per_trip_minutes"] == 5.1
-    assert summary["trips_delayed_3min"] == 106
-    assert summary["trips_delayed_5min"] == 70
+    assert summary["approx_trips"] == 2
+    assert summary["total_trip_delay_minutes"] == 9.0
+    assert summary["total_trip_delay_hours"] == 0.15
+    assert summary["avg_max_delay_per_trip_minutes"] == 4.5
+    assert summary["trips_delayed_3min"] == 2
+    assert summary["trips_delayed_5min"] == 1
     assert summary["total_stop_delay_minutes"] > summary["total_trip_delay_minutes"]
     assert "plain_language_summary" in summary
-    assert "16.15 hours" in summary["plain_language_summary"]
+
+
+def test_readonly_sql_rejects_multiple_statements(db_path):
+    with pytest.raises(ValueError, match="single SQL statement"):
+        run_readonly_sql("SELECT 1; SELECT 2", db_path)
+
+
+def test_readonly_sql_disables_external_file_access(db_path):
+    with pytest.raises(Exception):
+        run_readonly_sql("SELECT * FROM read_csv_auto('/etc/passwd')", db_path)
