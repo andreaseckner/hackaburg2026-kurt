@@ -45,8 +45,11 @@ class $AssetsImgGen {
   /// File path: assets/img/kurt.jpg
   AssetGenImage get kurt => const AssetGenImage('assets/img/kurt.jpg');
 
+  /// File path: assets/img/tofu.png
+  AssetGenImage get tofu => const AssetGenImage('assets/img/tofu.png');
+
   /// List of all assets
-  List<dynamic> get values => [busStop, kurt];
+  List<dynamic> get values => [busStop, kurt, tofu];
 }
 
 class $AssetsRecGen {
@@ -71,6 +74,16 @@ class $AssetsRecGen {
   ];
 }
 
+class $AssetsSoundsGen {
+  const $AssetsSoundsGen();
+
+  /// File path: assets/sounds/boing.mp3
+  String get boing => 'assets/sounds/boing.mp3';
+
+  /// List of all assets
+  List<String> get values => [boing];
+}
+
 class $AssetsWeatherGen {
   const $AssetsWeatherGen();
 
@@ -88,6 +101,7 @@ class Assets {
   static const $AssetsGtfsGen gtfs = $AssetsGtfsGen();
   static const $AssetsImgGen img = $AssetsImgGen();
   static const $AssetsRecGen rec = $AssetsRecGen();
+  static const $AssetsSoundsGen sounds = $AssetsSoundsGen();
   static const $AssetsWeatherGen weather = $AssetsWeatherGen();
 }
 
