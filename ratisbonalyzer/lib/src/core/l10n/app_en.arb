@@ -1,0 +1,10 @@
+{
+  "appTitle": "Ratisbonalyzer",
+  "@appTitle": {
+    "description": "The title of the application"
+  },
+  "controlPanelTitle": "Control Panel",
+  "@controlPanelTitle": {
+    "description": "Title for the map control panel"
+  }
+}

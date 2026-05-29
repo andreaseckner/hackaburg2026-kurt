@@ -21,11 +21,41 @@ class GtfsParser {
         .toList();
   }
 
+  /// Parse shapes.txt and return {shapeId: [LatLng, ...]} ordered by sequence.
+  static Map<String, List<LatLng>> parseShapes(String csvContent) {
+    final rows = Csv(lineDelimiter: '\n').decode(csvContent);
+    if (rows.isEmpty) return {};
+
+    final header = rows.first.map((e) => e.toString()).toList();
+    final Map<String, int> headerIndex = {
+      for (var i = 0; i < header.length; i++) header[i]: i,
+    };
+
+    final Map<String, List<_ShapePointRaw>> raw = {};
+    for (var row in rows.skip(1)) {
+      if (row.length < 4) continue;
+      final shapeId = row[headerIndex['shape_id']!].toString();
+      final lat = double.parse(row[headerIndex['shape_pt_lat']!].toString());
+      final lon = double.parse(row[headerIndex['shape_pt_lon']!].toString());
+      final seq = int.parse(row[headerIndex['shape_pt_sequence']!].toString());
+      raw.putIfAbsent(shapeId, () => []).add(_ShapePointRaw(lat, lon, seq));
+    }
+
+    final Map<String, List<LatLng>> shapes = {};
+    for (var entry in raw.entries) {
+      entry.value.sort((a, b) => a.sequence.compareTo(b.sequence));
+      shapes[entry.key] =
+          entry.value.map((p) => LatLng(p.lat, p.lon)).toList();
+    }
+    return shapes;
+  }
+
   static List<GtfsConnection> reconstructConnections({
     required String stopTimesCsv,
     required String tripsCsv,
     required String routesCsv,
     required List<GtfsStop> stops,
+    Map<String, List<LatLng>>? shapes,
   }) {
     final stopMap = {for (var stop in stops) stop.id: stop.location};
 
@@ -50,13 +80,21 @@ class GtfsParser {
       for (var i = 0; i < tripHeader.length; i++) tripHeader[i]: i,
     };
 
-    // Map tripId -> routeId
+    // Map tripId -> routeId and tripId -> shapeId
     final Map<String, String> tripToRoute = {};
+    final Map<String, String> tripToShape = {};
+    final shapeIdIdx = tripHeaderIndex['shape_id'];
 
     for (var row in tripRows.skip(1)) {
       final tripId = row[tripHeaderIndex['trip_id']!].toString();
       final routeId = row[tripHeaderIndex['route_id']!].toString();
       tripToRoute[tripId] = routeId;
+      if (shapeIdIdx != null) {
+        final shapeId = row[shapeIdIdx].toString().trim();
+        if (shapeId.isNotEmpty) {
+          tripToShape[tripId] = shapeId;
+        }
+      }
     }
 
     // Parse Stop Times
@@ -85,6 +123,7 @@ class GtfsParser {
 
     final List<GtfsConnection> connections = [];
     final Set<String> seenRoutePatterns = {};
+    final Map<String, String> patternToShapeId = {};
 
     for (var tripId in tripSequences.keys) {
       final routeId = tripToRoute[tripId] ?? 'unknown';
@@ -98,28 +137,60 @@ class GtfsParser {
 
       // We use a combination of stop IDs to identify unique route patterns
       final patternKey = '$routeId-${sequence.map((s) => s.stopId).join('-')}';
+
+      // Remember shape for this pattern
+      if (!patternToShapeId.containsKey(patternKey) &&
+          tripToShape.containsKey(tripId)) {
+        patternToShapeId[patternKey] = tripToShape[tripId]!;
+      }
+
       if (seenRoutePatterns.contains(patternKey)) continue;
       seenRoutePatterns.add(patternKey);
 
       List<LatLng> points = [];
       List<LatLng> midpoints = [];
 
-      // Fallback to stop-to-stop straight lines
-      for (var i = 0; i < sequence.length - 1; i++) {
-        final startLoc = stopMap[sequence[i].stopId];
-        final endLoc = stopMap[sequence[i + 1].stopId];
-        if (startLoc != null && endLoc != null) {
-          points.addAll([startLoc, endLoc]);
-          midpoints.add(
-            LatLng(
-              (startLoc.latitude + endLoc.latitude) / 2,
-              (startLoc.longitude + endLoc.longitude) / 2,
-            ),
-          );
+      // Try to use shape geometry
+      final shapeId = patternToShapeId[patternKey];
+      final shapePoints = (shapeId != null && shapes != null)
+          ? shapes[shapeId]
+          : null;
+
+      if (shapePoints != null && shapePoints.isNotEmpty) {
+        // Use shape points directly as the polyline
+        points = List<LatLng>.from(shapePoints);
+        // Compute midpoints per stop segment for label placement
+        for (var i = 0; i < sequence.length - 1; i++) {
+          final startLoc = stopMap[sequence[i].stopId];
+          final endLoc = stopMap[sequence[i + 1].stopId];
+          if (startLoc != null && endLoc != null) {
+            midpoints.add(
+              LatLng(
+                (startLoc.latitude + endLoc.latitude) / 2,
+                (startLoc.longitude + endLoc.longitude) / 2,
+              ),
+            );
+          }
+        }
+      } else {
+        // Fallback to stop-to-stop straight lines
+        for (var i = 0; i < sequence.length - 1; i++) {
+          final startLoc = stopMap[sequence[i].stopId];
+          final endLoc = stopMap[sequence[i + 1].stopId];
+          if (startLoc != null && endLoc != null) {
+            points.addAll([startLoc, endLoc]);
+            midpoints.add(
+              LatLng(
+                (startLoc.latitude + endLoc.latitude) / 2,
+                (startLoc.longitude + endLoc.longitude) / 2,
+              ),
+            );
+          }
         }
       }
 
       if (points.isNotEmpty) {
+        final List<String> currentStopIds = sequence.map((s) => s.stopId).toList();
         connections.add(
           GtfsConnection(
             tripId: tripId,
@@ -127,6 +198,7 @@ class GtfsParser {
             lineName: lineName,
             points: points,
             midpoints: midpoints,
+            stopIds: currentStopIds,
             color: color,
           ),
         );
@@ -142,4 +214,12 @@ class _StopSequenceItem {
   final int sequence;
 
   _StopSequenceItem(this.stopId, this.sequence);
+}
+
+class _ShapePointRaw {
+  final double lat;
+  final double lon;
+  final int sequence;
+
+  _ShapePointRaw(this.lat, this.lon, this.sequence);
 }
