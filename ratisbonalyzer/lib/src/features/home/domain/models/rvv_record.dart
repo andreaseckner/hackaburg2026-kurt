@@ -60,12 +60,12 @@ class RvvRecord {
   static DateTime _parseDate(String s) => _dateFmt.parse(s.trim());
   static bool _parseBool(String s) => s.trim().toLowerCase() == 'ja';
   static int? _parseOptionalInt(String s) {
-    final trimmed = s.trim();
+    final trimmed = s.trim().replaceAll('.', '');
     if (trimmed.isEmpty) return null;
     return int.tryParse(trimmed);
   }
 
-  static int _parseDistance(String s) {
+  static int _parseGermanInt(String s) {
     // German thousands separator: "3.912" means 3912
     final trimmed = s.trim().replaceAll('.', '');
     if (trimmed.isEmpty) return 0;
@@ -98,10 +98,8 @@ class RvvRecord {
       rotation: r[20].trim(),
       scheduleDeviationDeparture: _parseOptionalInt(r[21]),
       scheduleDeviationArrival: _parseOptionalInt(r[22]),
-      cumulativeDistance: _parseDistance(r[23]),
-      cumulativeTravelTime: int.parse(r[24].trim()),
+      cumulativeDistance: _parseGermanInt(r[23]),
+      cumulativeTravelTime: _parseGermanInt(r[24]),
     );
   }
 }
-
-

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ratisbonalyzer/src/core/assets.gen.dart';
 import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
@@ -61,6 +62,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Map<String, List<RvvRecord>> _recFiles = {};
   String? _selectedRecFile;
+  DateTime? _selectedDay;
+  DateTime? _firstTimestamp;
+  DateTime? _lastTimestamp;
 
   @override
   void initState() {
@@ -194,6 +198,14 @@ class _HomeScreenState extends State<HomeScreen> {
         _recFiles = recFiles;
         _selectedRecFile = recFiles.keys.isNotEmpty ? recFiles.keys.first : null;
         _isLoading = false;
+
+        if (_selectedRecFile != null) {
+          final days = _getDaysForSelectedDataset();
+          if (days.isNotEmpty) {
+            _selectedDay = days.first;
+            _updateTimestamps();
+          }
+        }
       });
     } catch (e) {
       debugPrint('Error loading GTFS data: $e');
@@ -241,6 +253,63 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         _selectedRouteIds.add(routeId);
       }
+    });
+  }
+
+  List<DateTime> _getDaysForSelectedDataset() {
+    if (_selectedRecFile == null || !_recFiles.containsKey(_selectedRecFile)) {
+      return [];
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final days = records.map((r) => r.operationDay).toSet().toList();
+    days.sort();
+    return days;
+  }
+
+  void _updateTimestamps() {
+    if (_selectedRecFile == null || _selectedDay == null) {
+      _firstTimestamp = null;
+      _lastTimestamp = null;
+      return;
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final dayRecords = records.where((r) => r.operationDay == _selectedDay).toList();
+    if (dayRecords.isEmpty) {
+      _firstTimestamp = null;
+      _lastTimestamp = null;
+      return;
+    }
+
+    DateTime minT = dayRecords.first.arrivalHalt;
+    DateTime maxT = dayRecords.first.departureHalt;
+    for (var r in dayRecords) {
+      if (r.arrivalHalt.isBefore(minT)) minT = r.arrivalHalt;
+      if (r.departureHalt.isAfter(maxT)) maxT = r.departureHalt;
+    }
+
+    _firstTimestamp = minT;
+    _lastTimestamp = maxT;
+  }
+
+  void _onRecFileChanged(String? newFile) {
+    if (newFile == null) return;
+    setState(() {
+      _selectedRecFile = newFile;
+      final days = _getDaysForSelectedDataset();
+      if (days.isNotEmpty) {
+        _selectedDay = days.first;
+      } else {
+        _selectedDay = null;
+      }
+      _updateTimestamps();
+    });
+  }
+
+  void _onDayChanged(DateTime? newDay) {
+    if (newDay == null) return;
+    setState(() {
+      _selectedDay = newDay;
+      _updateTimestamps();
     });
   }
 
@@ -485,36 +554,150 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           if (!_isLoading && _recFiles.isNotEmpty)
             Positioned(
-              top: 16,
               left: 16,
+              right: 16,
+              bottom: 16,
               child: Card(
-                elevation: 4,
+                elevation: 6,
+                shadowColor: Colors.black.withValues(alpha: 0.15),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: _selectedRecFile,
-                      icon: const Icon(Icons.arrow_drop_down),
-                      isDense: true,
-                      focusColor: Colors.transparent,
-                      items: _recFiles.keys.map((filename) {
-                        return DropdownMenuItem<String>(
-                          value: filename,
-                          child: Text(
-                            filename,
-                            style: const TextStyle(fontSize: 13),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.tune_outlined,
+                            color: theme.colorScheme.primary,
+                            size: 20,
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (value) {
-                        setState(() {
-                          _selectedRecFile = value;
-                        });
-                      },
-                    ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Playback Controls',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          const Spacer(),
+                          // Dataset Dropdown
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _selectedRecFile,
+                                icon: const Icon(Icons.arrow_drop_down),
+                                isDense: true,
+                                focusColor: Colors.transparent,
+                                items: _recFiles.keys.map((filename) {
+                                  return DropdownMenuItem<String>(
+                                    value: filename,
+                                    child: Text(
+                                      filename,
+                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: _onRecFileChanged,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Day Dropdown
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<DateTime>(
+                                value: _selectedDay,
+                                icon: const Icon(Icons.calendar_today, size: 14),
+                                isDense: true,
+                                focusColor: Colors.transparent,
+                                items: _getDaysForSelectedDataset().map((day) {
+                                  return DropdownMenuItem<DateTime>(
+                                    value: day,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 8.0),
+                                      child: Text(
+                                        DateFormat('dd.MM.yyyy').format(day),
+                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: _onDayChanged,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Progress Bar / Slider with flanking timestamps
+                      Row(
+                        children: [
+                          Text(
+                            _firstTimestamp != null
+                                ? DateFormat('HH:mm:ss').format(_firstTimestamp!)
+                                : '--:--:--',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                activeTrackColor: theme.colorScheme.primary,
+                                inactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.12),
+                                thumbColor: theme.colorScheme.primary,
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                                disabledActiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.4),
+                                disabledInactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.12),
+                                disabledThumbColor: theme.colorScheme.primary.withValues(alpha: 0.5),
+                              ),
+                              child: Slider(
+                                value: 0.0,
+                                onChanged: null, // Disabled for now (no playback logic yet)
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            _lastTimestamp != null
+                                ? DateFormat('HH:mm:ss').format(_lastTimestamp!)
+                                : '--:--:--',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),

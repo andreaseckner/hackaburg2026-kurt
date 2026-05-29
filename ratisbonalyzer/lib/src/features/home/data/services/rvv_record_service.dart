@@ -28,7 +28,6 @@ class RvvRecordService {
     final rows = const CsvToListConverter().convert(
       data,
       shouldParseNumbers: false,
-      eol: '\n',
     );
 
     if (rows.length <= 1) return [];
