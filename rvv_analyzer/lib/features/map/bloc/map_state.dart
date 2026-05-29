@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_connection.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_stop.dart';
 import 'package:rvv_analyzer/gtfs/models/recorded_stop_event.dart';
+import 'package:rvv_analyzer/features/map/models/weather_record.dart';
+import 'package:rvv_analyzer/core/timezone_utils.dart';
 
 enum MapStatus { initial, loading, loaded, error }
 
@@ -28,6 +30,9 @@ class MapState extends Equatable {
   final double playbackSpeed;
   final VisualizationMode vizMode;
 
+  // Weather data
+  final Map<DateTime, WeatherRecord> weatherRecords;
+
   const MapState({
     this.status = MapStatus.initial,
     this.allStops = const [],
@@ -43,7 +48,30 @@ class MapState extends Equatable {
     this.isPlaying = false,
     this.playbackSpeed = 60.0, // Default 1 min/s
     this.vizMode = VisualizationMode.buses,
+    this.weatherRecords = const {},
   });
+
+  WeatherRecord? get currentWeather {
+    if (currentPlaybackTime == null || weatherRecords.isEmpty) return null;
+
+    // Convert playback time (German local) to UTC
+    final utcTime = TimezoneUtils.convertGermanLocalToUtc(currentPlaybackTime!);
+    
+    // Find closest hourly weather record
+    final target = DateTime.utc(utcTime.year, utcTime.month, utcTime.day, utcTime.hour);
+    final direct = weatherRecords[target];
+    if (direct != null) return direct;
+
+    // Fallback 1: check offset by 1 hour backwards
+    final prev = weatherRecords[target.subtract(const Duration(hours: 1))];
+    if (prev != null) return prev;
+
+    // Fallback 2: check offset by 1 hour forwards
+    final next = weatherRecords[target.add(const Duration(hours: 1))];
+    if (next != null) return next;
+
+    return null;
+  }
 
   List<GtfsConnection> get filteredConnections {
     return allConnections
@@ -296,6 +324,7 @@ class MapState extends Equatable {
     bool? isPlaying,
     double? playbackSpeed,
     VisualizationMode? vizMode,
+    Map<DateTime, WeatherRecord>? weatherRecords,
   }) {
     return MapState(
       status: status ?? this.status,
@@ -312,6 +341,7 @@ class MapState extends Equatable {
       isPlaying: isPlaying ?? this.isPlaying,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       vizMode: vizMode ?? this.vizMode,
+      weatherRecords: weatherRecords ?? this.weatherRecords,
     );
   }
 
@@ -331,6 +361,7 @@ class MapState extends Equatable {
         isPlaying,
         playbackSpeed,
         vizMode,
+        weatherRecords,
       ];
 }
 

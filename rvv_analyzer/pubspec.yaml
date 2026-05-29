@@ -49,4 +49,6 @@ flutter:
     - assets/gtfs/stop_times.txt
     - assets/gtfs/trips.txt
     - assets/gtfs/routes.txt
+    - assets/weather/weather_regensburg_all.csv
     - assets/rec/october_2024.csv
+    - assets/rec/october_2024_test.csv
