@@ -6,7 +6,9 @@ import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
 import 'package:ratisbonalyzer/src/core/theme/dimens.dart';
 import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart';
+import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
+import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
 
 class _RouteData {
   final String routeId;
@@ -45,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const double _stopMarkerSize = 24.0;
 
   final GtfsService _gtfsService = GtfsService();
+  final RvvRecordService _rvvRecordService = RvvRecordService();
   final MapController _mapController = MapController();
   double _currentZoom = _initialZoom;
 
@@ -56,6 +59,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _controlPanelExpanded = true;
   Set<String> _selectedRouteIds = {};
 
+  Map<String, List<RvvRecord>> _recFiles = {};
+  String? _selectedRecFile;
+
   @override
   void initState() {
     super.initState();
@@ -64,11 +70,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadData() async {
     try {
-      final stops = await _gtfsService.loadStops();
-      final routes = await _gtfsService.loadRoutes();
-      final trips = await _gtfsService.loadTrips();
-      final stopTimes = await _gtfsService.loadStopTimes();
-      final shapeMap = await _gtfsService.loadShapes();
+      final results = await Future.wait([
+        _gtfsService.loadStops(),
+        _gtfsService.loadRoutes(),
+        _gtfsService.loadTrips(),
+        _gtfsService.loadStopTimes(),
+        _gtfsService.loadShapes(),
+        _rvvRecordService.loadAllRecFiles(),
+      ]);
+
+      final stops = results[0] as List<Stop>;
+      final routes = results[1] as List<RouteInfo>;
+      final trips = results[2] as List<Trip>;
+      final stopTimes = results[3] as List<StopTime>;
+      final shapeMap = results[4] as Map<String, List<LatLng>>;
+      final recFiles = results[5] as Map<String, List<RvvRecord>>;
 
       if (!mounted) return;
 
@@ -175,6 +191,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _stops = stops;
         _allRoutes = allRoutes;
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
+        _recFiles = recFiles;
+        _selectedRecFile = recFiles.keys.isNotEmpty ? recFiles.keys.first : null;
         _isLoading = false;
       });
     } catch (e) {
@@ -464,6 +482,42 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_isLoading)
             const Center(
               child: CircularProgressIndicator(),
+            ),
+          if (!_isLoading && _recFiles.isNotEmpty)
+            Positioned(
+              top: 16,
+              left: 16,
+              child: Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _selectedRecFile,
+                      icon: const Icon(Icons.arrow_drop_down),
+                      isDense: true,
+                      focusColor: Colors.transparent,
+                      items: _recFiles.keys.map((filename) {
+                        return DropdownMenuItem<String>(
+                          value: filename,
+                          child: Text(
+                            filename,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedRecFile = value;
+                        });
+                      },
+                    ),
+                  ),
+                ),
+              ),
             ),
         ],
       ),

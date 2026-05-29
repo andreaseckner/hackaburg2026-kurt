@@ -44,3 +44,4 @@ flutter:
   assets:
     - assets/gtfs/
     - assets/img/
+    - assets/rec/
