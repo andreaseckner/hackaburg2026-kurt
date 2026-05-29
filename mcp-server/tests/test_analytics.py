@@ -7,11 +7,14 @@ import pytest
 
 from core.analytics import (
     compare_directions,
+    explain_pain_points_for_day,
     get_bottleneck_stops,
+    get_corridor_pain_points,
     get_days_with_most_delays,
     get_delays_by_hour,
     get_delays_by_weekday,
     get_early_departures,
+    get_segment_delay_growth_hotspots,
     get_trip_delay_summary,
     get_worst_stops,
     run_readonly_sql,
@@ -44,17 +47,18 @@ def db_path(tmp_path):
         """
         CREATE TABLE departure_delay_events AS
         SELECT * FROM (VALUES
-            (DATE '2024-12-12', 4, 8, 1, 'Start A', 'A', 'A1',  60.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:00:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-12', 4, 8, 1, 'Middle',  'M', 'M1', 240.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:10:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-12', 4, 8, 1, 'End B',   'B', 'B1', 180.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:20:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-12', 4, 9, 1, 'End B',   'B', 'B1', -90.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:00:00', 'End B', 'B', 'Start A', 'A'),
-            (DATE '2024-12-12', 4, 9, 1, 'Middle',  'M', 'M1', 120.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:10:00', 'End B', 'B', 'Start A', 'A'),
-            (DATE '2024-12-12', 4, 9, 1, 'Start A', 'A', 'A1', 300.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:20:00', 'End B', 'B', 'Start A', 'A'),
-            (DATE '2024-12-13', 5, 10, 1, 'Start A', 'A', 'A1', 30.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:00:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-13', 5, 10, 1, 'End B',   'B', 'B1', 90.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:20:00', 'Start A', 'A', 'End B', 'B')
+            (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'Start A', 'A', 'A1',  60.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:00:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'Middle',  'M', 'M1', 240.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:10:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'End B',   'B', 'B1', 180.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:20:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-12', 4, 'Thursday', 9, 1, 'End B',   'B', 'B1', -90.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:00:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-12', 4, 'Thursday', 9, 1, 'Middle',  'M', 'M1', 120.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:10:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-12', 4, 'Thursday', 9, 1, 'Start A', 'A', 'A1', 300.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:20:00', 'End B', 'B', 'Start A', 'A'),
+            (DATE '2024-12-13', 5, 'Friday', 10, 1, 'Start A', 'A', 'A1', 30.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:00:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-13', 5, 'Friday', 10, 1, 'End B',   'B', 'B1', 90.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:20:00', 'Start A', 'A', 'End B', 'B')
         ) AS t(
             service_date,
             weekday_number,
+            weekday_name,
             planned_departure_hour,
             line_id,
             stop_name,
@@ -145,6 +149,42 @@ def test_get_trip_delay_summary_returns_user_friendly_trip_metrics(db_path):
     assert summary["trips_delayed_5min"] == 1
     assert summary["total_stop_delay_minutes"] > summary["total_trip_delay_minutes"]
     assert "plain_language_summary" in summary
+
+
+def test_get_corridor_pain_points_ranks_directional_route_problems(db_path):
+    rows = get_corridor_pain_points(db_path, limit=2)
+
+    assert len(rows) == 2
+    assert rows[0]["route_start"] == "Start A"
+    assert rows[0]["route_end"] == "End B"
+    assert rows[0]["total_stop_delay_minutes"] == 10.0
+    assert rows[0]["pct_delayed_3min"] == 40.0
+    assert rows[0]["worst_hour"]["hour"] == 8
+    assert rows[0]["worst_day"]["service_date"] == date(2024, 12, 12)
+
+
+def test_get_segment_delay_growth_hotspots_finds_where_delay_is_added(db_path):
+    rows = get_segment_delay_growth_hotspots(db_path, limit=2, min_growth_1min_events=1)
+
+    assert len(rows) == 2
+    assert rows[0]["previous_stop"] == "B"
+    assert rows[0]["current_stop"] == "M"
+    assert rows[0]["route_start"] == "End B"
+    assert rows[0]["route_end"] == "Start A"
+    assert rows[0]["avg_growth_seconds"] == 210.0
+    assert rows[0]["growth_1min_events"] == 1
+
+
+def test_explain_pain_points_for_day_returns_demo_ready_day_story(db_path):
+    story = explain_pain_points_for_day(db_path, service_date="2024-12-12")
+
+    assert story["service_date"] == date(2024, 12, 12)
+    assert story["trip_summary"]["approx_trips"] == 2
+    assert story["worst_corridor"]["route_start"] == "Start A"
+    assert story["worst_corridor"]["route_end"] == "End B"
+    assert story["worst_hour"]["hour"] == 8
+    assert story["worst_stops"][0]["stop_name"] == "A"
+    assert "Start A → End B" in story["plain_language_summary"]
 
 
 def test_readonly_sql_rejects_multiple_statements(db_path):
