@@ -41,10 +41,9 @@ class ChatResponse {
       data: json['data'] as List<dynamic>? ?? const [],
       mapState: json['map_state'] as Map<String, dynamic>?,
       ui: json['ui'] as Map<String, dynamic>? ?? const {},
-      suggestedQuestions:
-          (json['suggested_questions'] as List<dynamic>? ?? [])
-              .map((item) => item.toString())
-              .toList(),
+      suggestedQuestions: (json['suggested_questions'] as List<dynamic>? ?? [])
+          .map((item) => item.toString())
+          .toList(),
       unsupportedReason: json['unsupported_reason'] as String?,
     );
   }

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ratisbonalyzer/src/core/assets.gen.dart';
 import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
 import 'package:ratisbonalyzer/src/core/theme/dimens.dart';
+import 'package:ratisbonalyzer/src/features/chat/bloc/chat_bloc.dart';
+import 'package:ratisbonalyzer/src/features/chat/widgets/chat_panel.dart';
 import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
@@ -118,11 +121,9 @@ class _HomeScreenState extends State<HomeScreen> {
             seenShapeIds.add(shapeId);
             final points = shapeMap[shapeId];
             if (points != null && points.length >= 2) {
-              polylines.add(Polyline(
-                points: points,
-                strokeWidth: 3.0,
-                color: color,
-              ));
+              polylines.add(
+                Polyline(points: points, strokeWidth: 3.0, color: color),
+              );
 
               // Place a label at the midpoint of the shape
               if (shortName.isNotEmpty) {
@@ -134,8 +135,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 18,
                     alignment: Alignment.center,
                     child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: color,
                         borderRadius: BorderRadius.circular(4),
@@ -160,14 +163,16 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (polylines.isNotEmpty) {
-          allRoutes.add(_RouteData(
-            routeId: routeId,
-            shortName: shortName,
-            color: color,
-            polylines: polylines,
-            labels: labels,
-            stopIds: allStopIds,
-          ));
+          allRoutes.add(
+            _RouteData(
+              routeId: routeId,
+              shortName: shortName,
+              color: color,
+              polylines: polylines,
+              labels: labels,
+              stopIds: allStopIds,
+            ),
+          );
         }
       }
 
@@ -226,6 +231,19 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _showChatPanel(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (modalContext) {
+        return BlocProvider(
+          create: (_) => ChatBloc(),
+          child: const ChatPanel(),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -250,6 +268,12 @@ class _HomeScreenState extends State<HomeScreen> {
             color: theme.colorScheme.primary,
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () => _showChatPanel(context),
+          ),
+        ],
       ),
       body: Stack(
         children: [
@@ -271,8 +295,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 urlTemplate: _osmUrlTemplate,
                 userAgentPackageName: _userAgentPackage,
               ),
-              if (_showBusLines)
-                PolylineLayer(polylines: _filteredPolylines),
+              if (_showBusLines) PolylineLayer(polylines: _filteredPolylines),
               if (_showBusLines && _currentZoom >= _initialZoom)
                 MarkerLayer(markers: _filteredLabels),
               if (_showBusStops)
@@ -299,10 +322,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? Card(
                     elevation: 4,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: ConstrainedBox(
-                      constraints:
-                          const BoxConstraints(maxHeight: 400, maxWidth: 220),
+                      constraints: const BoxConstraints(
+                        maxHeight: 400,
+                        maxWidth: 220,
+                      ),
                       child: Padding(
                         padding: const EdgeInsets.all(12),
                         child: SingleChildScrollView(
@@ -323,9 +349,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: () => setState(
-                                        () => _controlPanelExpanded = false),
+                                      () => _controlPanelExpanded = false,
+                                    ),
                                     child: const Icon(
-                                        Icons.chevron_right, size: 20),
+                                      Icons.chevron_right,
+                                      size: 20,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -335,8 +364,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 children: [
                                   const Icon(Icons.route, size: 18),
                                   const SizedBox(width: 8),
-                                  const Text('Bus Lines',
-                                      style: TextStyle(fontSize: 13)),
+                                  const Text(
+                                    'Bus Lines',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                   const SizedBox(width: 12),
                                   SizedBox(
                                     height: 28,
@@ -357,8 +388,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 children: [
                                   const Icon(Icons.directions_bus, size: 18),
                                   const SizedBox(width: 8),
-                                  const Text('Bus Stops',
-                                      style: TextStyle(fontSize: 13)),
+                                  const Text(
+                                    'Bus Stops',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                   const SizedBox(width: 12),
                                   SizedBox(
                                     height: 28,
@@ -377,29 +410,36 @@ class _HomeScreenState extends State<HomeScreen> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Text('Filter',
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold)),
+                                  const Text(
+                                    'Filter',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: _selectAllRoutes,
-                                    child: const Text('All',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.blue,
-                                            decoration:
-                                                TextDecoration.underline)),
+                                    child: const Text(
+                                      'All',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: _selectNoRoutes,
-                                    child: const Text('None',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.blue,
-                                            decoration:
-                                                TextDecoration.underline)),
+                                    child: const Text(
+                                      'None',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -408,19 +448,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                 spacing: 4,
                                 runSpacing: 4,
                                 children: _allRoutes.map((route) {
-                                  final selected = _selectedRouteIds
-                                      .contains(route.routeId);
+                                  final selected = _selectedRouteIds.contains(
+                                    route.routeId,
+                                  );
                                   return GestureDetector(
                                     onTap: () => _toggleRoute(route.routeId),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 6, vertical: 3),
+                                        horizontal: 6,
+                                        vertical: 3,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: selected
                                             ? route.color
                                             : Colors.grey.shade200,
-                                        borderRadius:
-                                            BorderRadius.circular(4),
+                                        borderRadius: BorderRadius.circular(4),
                                         border: Border.all(
                                           color: route.color,
                                           width: 1.5,
@@ -449,10 +491,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 : Card(
                     elevation: 4,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: InkWell(
-                      onTap: () =>
-                          setState(() => _controlPanelExpanded = true),
+                      onTap: () => setState(() => _controlPanelExpanded = true),
                       borderRadius: BorderRadius.circular(12),
                       child: const Padding(
                         padding: EdgeInsets.all(10),
@@ -461,10 +503,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
           ),
-          if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(),
-            ),
+          if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],
       ),
     );

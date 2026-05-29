@@ -55,12 +55,29 @@ def test_health_returns_ok(monkeypatch, db_path):
 
 def test_chat_query_returns_supported_answer(monkeypatch, db_path):
     monkeypatch.setenv("TRANSPORT_DB_PATH", db_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     client = TestClient(app)
 
     response = client.post("/chat/query", json={"question": "Where should we intervene first on weekday mornings?"})
 
     assert response.status_code == 200
-    assert response.json()["intent"] == "weekday_morning_intervention"
+    body = response.json()
+    assert body["intent"] == "weekday_morning_intervention"
+    assert body["mode"] == "deterministic_fallback"
+    assert body["ui"]["response_type"] == "ranked_list"
+
+
+def test_chat_query_can_force_deterministic_mode(monkeypatch, db_path):
+    monkeypatch.setenv("TRANSPORT_DB_PATH", db_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat/query",
+        json={"question": "Where should we intervene first on weekday mornings?", "use_llm": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "deterministic"
 
 
 def test_chat_query_rejects_empty_question():

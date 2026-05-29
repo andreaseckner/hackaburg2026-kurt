@@ -33,19 +33,23 @@ def _time_filter_clauses(
     hour_from: int | None = None,
     hour_to: int | None = None,
     weekday_only: bool | None = None,
+    table_alias: str | None = None,
 ) -> tuple[list[str], list[Any]]:
     _validate_hour(hour_from, "hour_from")
     _validate_hour(hour_to, "hour_to")
+    prefix = f"{table_alias}." if table_alias else ""
+    hour_expr = f"TRY_CAST({prefix}planned_departure_hour AS INTEGER)"
+    weekday_expr = f"TRY_CAST({prefix}weekday_number AS INTEGER)"
     clauses: list[str] = []
     params: list[Any] = []
     if hour_from is not None:
-        clauses.append("planned_departure_hour >= ?")
+        clauses.append(f"{hour_expr} >= ?")
         params.append(int(hour_from))
     if hour_to is not None:
-        clauses.append("planned_departure_hour <= ?")
+        clauses.append(f"{hour_expr} <= ?")
         params.append(int(hour_to))
     if weekday_only is True:
-        clauses.append("weekday_number BETWEEN 1 AND 5")
+        clauses.append(f"{weekday_expr} BETWEEN 1 AND 5")
     return clauses, params
 
 
@@ -129,31 +133,79 @@ def raw_table_overview(db_path: str | None = None) -> list[dict[str, Any]]:
 def get_days_with_most_delays(db_path: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
     limit = _limit(limit)
     sql = """
+        WITH trip_starts AS (
+          SELECT
+            service_date,
+            weekday_name,
+            line_id,
+            direction_id,
+            run_id,
+            route_start,
+            route_start_code,
+            route_end,
+            route_end_code,
+            planned_departure AS trip_start_time,
+            LEAD(planned_departure) OVER (
+              PARTITION BY service_date, line_id, direction_id, run_id, route_start, route_end
+              ORDER BY planned_departure
+            ) AS next_trip_start_time
+          FROM departure_delay_events
+          WHERE stop_name = route_start OR stop_code = route_start_code
+        ),
+        trip_metrics AS (
+          SELECT
+            t.service_date,
+            t.weekday_name,
+            t.line_id,
+            t.direction_id,
+            t.run_id,
+            t.route_start,
+            t.route_end,
+            t.trip_start_time,
+            MAX(GREATEST(e.departure_delay_seconds, 0)) AS max_positive_delay_seconds,
+            SUM(GREATEST(e.departure_delay_seconds, 0)) AS stop_delay_seconds
+          FROM trip_starts t
+          JOIN departure_delay_events e
+            ON e.service_date = t.service_date
+           AND e.line_id = t.line_id
+           AND e.direction_id = t.direction_id
+           AND e.run_id = t.run_id
+           AND e.route_start = t.route_start
+           AND e.route_end = t.route_end
+           AND e.planned_departure >= t.trip_start_time
+           AND (t.next_trip_start_time IS NULL OR e.planned_departure < t.next_trip_start_time)
+          GROUP BY t.service_date, t.weekday_name, t.line_id, t.direction_id, t.run_id, t.route_start, t.route_end, t.trip_start_time
+        )
         SELECT
           service_date,
           weekday_name,
           line_id,
-          event_count,
-          ROUND(total_positive_delay_minutes, 1) AS total_delay_minutes,
-          ROUND(avg_positive_delay_seconds, 1) AS avg_positive_delay_seconds,
-          delayed_3min_events,
-          early_1min_events
-        FROM daily_delay_metrics
-        ORDER BY total_positive_delay_minutes DESC
+          COUNT(*) AS approx_trips,
+          ROUND(SUM(max_positive_delay_seconds) / 60.0, 1) AS total_trip_delay_minutes,
+          ROUND(SUM(max_positive_delay_seconds) / 3600.0, 2) AS total_trip_delay_hours,
+          ROUND(AVG(max_positive_delay_seconds) / 60.0, 1) AS avg_max_delay_per_trip_minutes,
+          ROUND(MAX(max_positive_delay_seconds) / 60.0, 1) AS worst_trip_delay_minutes,
+          SUM(CASE WHEN max_positive_delay_seconds >= 180 THEN 1 ELSE 0 END) AS trips_delayed_3min,
+          ROUND(SUM(stop_delay_seconds) / 60.0, 1) AS total_stop_delay_minutes
+        FROM trip_metrics
+        GROUP BY service_date, weekday_name, line_id
+        ORDER BY total_trip_delay_minutes DESC
         LIMIT ?
     """
     return _query(db_path, sql, [limit])
 
 
-def get_delays_by_weekday(db_path: str | None = None) -> list[dict[str, Any]]:
-    sql = """
+def get_delays_by_weekday(db_path: str | None = None, order: str = "highest") -> list[dict[str, Any]]:
+    direction = "ASC" if order == "lowest" else "DESC"
+    sql = f"""
         SELECT
           weekday_name,
           CAST(MIN(weekday_number) AS INTEGER) AS weekday_number,
           line_id,
           COUNT(DISTINCT service_date) AS service_days,
           SUM(event_count) AS event_count,
-          ROUND(SUM(total_positive_delay_minutes), 1) AS total_delay_minutes,
+          ROUND(SUM(total_positive_delay_minutes), 1) AS total_stop_delay_minutes,
+          ROUND(SUM(total_positive_delay_minutes) / COUNT(DISTINCT service_date), 1) AS avg_daily_stop_delay_minutes,
           ROUND(AVG(avg_positive_delay_seconds), 1) AS avg_positive_delay_seconds,
           SUM(delayed_3min_events) AS delayed_3min_events,
           SUM(early_1min_events) AS early_1min_events
@@ -163,7 +215,7 @@ def get_delays_by_weekday(db_path: str | None = None) -> list[dict[str, Any]]:
           FROM departure_delay_events
         ) USING (service_date)
         GROUP BY weekday_name, line_id
-        ORDER BY SUM(total_positive_delay_minutes) DESC
+        ORDER BY SUM(total_positive_delay_minutes) {direction}
     """
     return _query(db_path, sql)
 
@@ -174,7 +226,7 @@ def get_delays_by_hour(db_path: str | None = None) -> list[dict[str, Any]]:
           CAST(planned_departure_hour AS INTEGER) AS hour,
           line_id,
           COUNT(*) AS event_count,
-          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_delay_minutes,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
           ROUND(AVG(departure_delay_seconds), 1) AS avg_delay_seconds,
           ROUND(MEDIAN(departure_delay_seconds), 1) AS median_delay_seconds,
           SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
@@ -187,27 +239,72 @@ def get_delays_by_hour(db_path: str | None = None) -> list[dict[str, Any]]:
     return _query(db_path, sql)
 
 
-def get_worst_stops(db_path: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+def get_worst_stops(db_path: str | None = None, limit: int = 10, service_date: str | None = None) -> list[dict[str, Any]]:
     limit = _limit(limit)
-    sql = """
+    date_filter = "AND service_date = ?" if service_date else ""
+    params: list[Any] = [service_date] if service_date else []
+    sql = f"""
         SELECT
           stop_name,
           stop_code,
           stop_point,
           line_id,
           COUNT(*) AS event_count,
-          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_delay_minutes,
+          COUNT(DISTINCT service_date) AS service_days,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(
+            SUM(GREATEST(departure_delay_seconds, 0)) / 60.0 / COUNT(DISTINCT service_date),
+            1
+          ) AS avg_daily_stop_delay_minutes,
           ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
           ROUND(MEDIAN(departure_delay_seconds), 1) AS median_delay_seconds,
           SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
           SUM(CASE WHEN departure_delay_seconds < -60 THEN 1 ELSE 0 END) AS early_1min_events
         FROM departure_delay_events
         WHERE stop_name IS NOT NULL
+          {date_filter}
         GROUP BY stop_name, stop_code, stop_point, line_id
-        ORDER BY total_delay_minutes DESC
+        ORDER BY total_stop_delay_minutes DESC
         LIMIT ?
     """
-    return _query(db_path, sql, [limit])
+    return _query(db_path, sql, [*params, limit])
+
+
+def get_stop_delay_extremes(
+    db_path: str | None = None,
+    limit: int = 10,
+    order: str = "lowest",
+    min_events: int = 1,
+) -> list[dict[str, Any]]:
+    """Rank stops by average positive delay, for lowest/highest overall delay questions."""
+    limit = _limit(limit)
+    normalized_order = order.strip().lower()
+    if normalized_order not in {"lowest", "highest"}:
+        raise ValueError("order must be 'lowest' or 'highest'")
+    direction = "ASC" if normalized_order == "lowest" else "DESC"
+    min_events = max(1, int(min_events))
+    sql = f"""
+        SELECT
+          stop_name,
+          stop_code,
+          stop_point,
+          line_id,
+          COUNT(*) AS event_count,
+          COUNT(DISTINCT service_date) AS service_days,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
+          ROUND(MEDIAN(GREATEST(departure_delay_seconds, 0)), 1) AS median_positive_delay_seconds,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_delayed_3min,
+          'avg_positive_delay_seconds' AS ranking_metric
+        FROM departure_delay_events
+        WHERE stop_name IS NOT NULL
+        GROUP BY stop_name, stop_code, stop_point, line_id
+        HAVING COUNT(*) >= ?
+        ORDER BY avg_positive_delay_seconds {direction}, pct_delayed_3min {direction}, total_stop_delay_minutes {direction}, event_count DESC
+        LIMIT ?
+    """
+    return _query(db_path, sql, [min_events, limit])
 
 
 def get_early_departures(db_path: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
@@ -284,14 +381,14 @@ def compare_directions(db_path: str | None = None) -> list[dict[str, Any]]:
           route_end,
           route_end_code,
           COUNT(*) AS event_count,
-          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_delay_minutes,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
           ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
           ROUND(MEDIAN(departure_delay_seconds), 1) AS median_delay_seconds,
           SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
           SUM(CASE WHEN departure_delay_seconds < -60 THEN 1 ELSE 0 END) AS early_1min_events
         FROM departure_delay_events
         GROUP BY line_id, direction_id, route_start, route_start_code, route_end, route_end_code
-        ORDER BY total_delay_minutes DESC
+        ORDER BY total_stop_delay_minutes DESC
     """
     return _query(db_path, sql)
 
@@ -645,8 +742,8 @@ def get_segment_delay_growth_hotspots_filtered(
     """Find trip-safe delay-growth segments with explicit demo filters."""
     limit = _limit(limit)
     min_growth_1min_events = max(1, int(min_growth_1min_events))
-    clauses, params = _time_filter_clauses(hour_from, hour_to)
-    event_filter = _where_sql([f"e.{clause}" for clause in clauses])
+    clauses, params = _time_filter_clauses(hour_from, hour_to, table_alias="e")
+    event_filter = _where_sql(clauses)
     city_filter = ""
     if toward_city_center:
         city_filter = (
@@ -834,3 +931,102 @@ def explain_pain_points_for_day(db_path: str | None = None, service_date: str = 
             "to locate where the reliability problem concentrates. It identifies where/when, not the external cause."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Flexible delay ranking
+# ---------------------------------------------------------------------------
+
+_VALID_GROUP_BY = {"stop", "weekday", "hour", "date", "corridor", "direction"}
+
+
+def get_delay_ranking(
+    *,
+    group_by: str = "stop",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    weekday_only: bool | None = None,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    stop_name: str | None = None,
+    direction: str | None = None,
+    order: str = "highest",
+    limit: int = 10,
+    db_path: str | None = None,
+) -> list[dict[str, Any]]:
+    """Flexible delay ranking with filters.
+
+    group_by: what to rank — stop | weekday | hour | date | corridor | direction
+    Filters narrow the dataset before aggregation.
+    """
+    if group_by not in _VALID_GROUP_BY:
+        raise ValueError(f"group_by must be one of {_VALID_GROUP_BY}")
+
+    # -- SELECT / GROUP BY clause per group_by --------------------------------
+    if group_by == "stop":
+        select = "stop_name"
+        group = "stop_name"
+    elif group_by == "weekday":
+        select = "weekday_name, CAST(MIN(weekday_number) AS INTEGER) AS weekday_number"
+        group = "weekday_name"
+    elif group_by == "hour":
+        select = "CAST(planned_departure_hour AS INTEGER) AS hour"
+        group = "planned_departure_hour"
+    elif group_by == "date":
+        select = "CAST(service_date AS VARCHAR) AS service_date, MIN(weekday_name) AS weekday_name"
+        group = "service_date"
+    elif group_by == "corridor":
+        select = "route_start, route_end, direction_id"
+        group = "route_start, route_end, direction_id"
+    elif group_by == "direction":
+        select = "direction_id, MIN(route_start) AS route_start, MIN(route_end) AS route_end"
+        group = "direction_id"
+
+    direction_sql = "ASC" if order == "lowest" else "DESC"
+
+    # -- WHERE filters --------------------------------------------------------
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if date_from is not None:
+        conditions.append("service_date >= CAST(? AS DATE)")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("service_date <= CAST(? AS DATE)")
+        params.append(date_to)
+    if weekday_only is True:
+        conditions.append("CAST(weekday_number AS INTEGER) BETWEEN 0 AND 4")
+    if hour_from is not None:
+        conditions.append("planned_departure_hour >= ?")
+        params.append(hour_from)
+    if hour_to is not None:
+        conditions.append("planned_departure_hour <= ?")
+        params.append(hour_to)
+    if stop_name is not None:
+        conditions.append("stop_name = ?")
+        params.append(stop_name)
+    if direction is not None:
+        conditions.append("(route_start = ? OR route_end = ?)")
+        params.append(direction)
+        params.append(direction)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(max(1, min(limit, 50)))
+
+    sql = f"""
+        SELECT
+          {select},
+          COUNT(*) AS event_count,
+          COUNT(DISTINCT service_date) AS service_days,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(AVG(CASE WHEN departure_delay_seconds > 0 THEN departure_delay_seconds END), 1) AS avg_positive_delay_seconds,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS pct_delayed_3min,
+          SUM(CASE WHEN departure_delay_seconds < -60 THEN 1 ELSE 0 END) AS early_1min_events
+        FROM departure_delay_events
+        {where}
+        GROUP BY {group}
+        ORDER BY total_stop_delay_minutes {direction_sql}
+        LIMIT ?
+    """
+    return _query(db_path, sql, params)

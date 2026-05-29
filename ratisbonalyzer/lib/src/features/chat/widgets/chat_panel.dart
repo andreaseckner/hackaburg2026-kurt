@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:rvv_analyzer/features/chat/bloc/chat_bloc.dart';
-import 'package:rvv_analyzer/features/chat/bloc/chat_event.dart';
-import 'package:rvv_analyzer/features/chat/bloc/chat_state.dart';
-import 'package:rvv_analyzer/features/chat/models/chat_response.dart';
+import 'package:ratisbonalyzer/src/features/chat/bloc/chat_bloc.dart';
+import 'package:ratisbonalyzer/src/features/chat/bloc/chat_event.dart';
+import 'package:ratisbonalyzer/src/features/chat/bloc/chat_state.dart';
+import 'package:ratisbonalyzer/src/features/chat/models/chat_response.dart';
 
 class ChatPanel extends StatefulWidget {
   const ChatPanel({super.key});
@@ -47,7 +47,10 @@ class _ChatPanelState extends State<ChatPanel> {
                   const Expanded(
                     child: Text(
                       'Reliability question',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -91,8 +94,8 @@ class _ChatPanelState extends State<ChatPanel> {
                         : () {
                             _controller.text = question;
                             context.read<ChatBloc>().add(
-                                  ChatSuggestedQuestionSelected(question),
-                                );
+                              ChatSuggestedQuestionSelected(question),
+                            );
                           },
                   );
                 }).toList(),
@@ -100,7 +103,8 @@ class _ChatPanelState extends State<ChatPanel> {
               const SizedBox(height: 16),
               if (state.status == ChatStatus.loading)
                 const Center(child: CircularProgressIndicator()),
-              if (state.status == ChatStatus.error && state.errorMessage != null)
+              if (state.status == ChatStatus.error &&
+                  state.errorMessage != null)
                 Text(
                   state.errorMessage!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
@@ -172,7 +176,9 @@ class _AnswerCard extends StatelessWidget {
             Text(response.answer),
             if (response.ui['primary_metric'] is Map<String, dynamic>) ...[
               const SizedBox(height: 8),
-              _PrimaryMetric(metric: response.ui['primary_metric'] as Map<String, dynamic>),
+              _PrimaryMetric(
+                metric: response.ui['primary_metric'] as Map<String, dynamic>,
+              ),
             ],
             if (response.bullets.isNotEmpty) ...[
               const SizedBox(height: 8),

@@ -65,8 +65,18 @@ def test_city_center_segment_question_routes_to_delay_growth_answer(db_path):
 def test_passenger_delay_exposure_after_16_routes_to_stop_answer(db_path):
     response = answer_transport_question("Which stops expose passengers to the most delay after 16:00?", db_path)
 
-    assert response["intent"] == "passenger_delay_exposure_after_16"
+    assert response["intent"] == "passenger_delay_exposure"
     assert response["metric_source"] == "stop_delay_exposure_filtered hour_from=16 hour_to=23"
+    assert response["map_state"]["layer_type"] == "stops"
+    assert "Hauptbahnhof" in response["map_state"]["stops"]
+
+
+def test_passenger_delay_exposure_after_17_routes_to_stop_answer(db_path):
+    response = answer_transport_question("Which stops expose passengers to the most delay after 17:00?", db_path)
+
+    assert response["intent"] == "passenger_delay_exposure"
+    assert response["metric_source"] == "stop_delay_exposure_filtered hour_from=17 hour_to=23"
+    assert response["map_state"]["hour_from"] == 17
     assert response["map_state"]["layer_type"] == "stops"
     assert "Hauptbahnhof" in response["map_state"]["stops"]
 
@@ -78,6 +88,35 @@ def test_unsupported_question_returns_suggestions(db_path):
     assert response["metric_source"] == "none"
     assert response["map_state"] is None
     assert response["suggested_questions"] == SUGGESTED_QUESTIONS
+
+
+def test_lowest_delay_station_question_routes_to_stop_extremes(db_path):
+    response = answer_transport_question("what station has the lowest delay overall?", db_path)
+
+    assert response["intent"] == "stop_delay_extremes"
+    assert response["metric_source"] == "stop_delay_extremes order=lowest"
+    assert response["map_state"]["layer_type"] == "stops"
+    assert response["map_state"]["severity_metric"] == "avg_positive_delay_seconds"
+    assert response["data"][0]["stop_name"] == "Suburb"
+
+
+def test_date_delay_question_uses_end_to_end_trip_metrics(db_path):
+    response = answer_transport_question("What was the most delay on 12.12.2024?", db_path)
+
+    assert response["intent"] == "trip_delay_for_date"
+    assert response["metric_source"] == "trip_delay_summary max positive delay per end-to-end trip"
+    assert response["map_state"]["severity_metric"] == "total_trip_delay_minutes"
+    assert response["data"][0]["total_trip_delay_minutes"] == 4.0
+    assert response["data"][0]["worst_trip_delay_minutes"] == 4.0
+    assert response["data"][0]["total_stop_delay_minutes"] == 8.0
+    assert "Stop-level burden, for context only" in response["bullets"][-1]
+
+
+def test_iso_date_delay_question_uses_end_to_end_trip_metrics(db_path):
+    response = answer_transport_question("How much delay on 2024-12-12?", db_path)
+
+    assert response["intent"] == "trip_delay_for_date"
+    assert response["data"][0]["total_trip_delay_minutes"] == 4.0
 
 
 def test_sql_like_question_is_not_executed(db_path):

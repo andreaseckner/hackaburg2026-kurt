@@ -12,10 +12,12 @@ from core.analytics import (
     get_bottleneck_stops,
     get_corridor_pain_points,
     get_days_with_most_delays,
+    get_delay_ranking,
     get_delays_by_hour,
     get_delays_by_weekday,
     get_early_departures,
     get_segment_delay_growth_hotspots,
+    get_stop_delay_extremes as get_stop_delay_extremes_rows,
     get_trip_delay_summary,
     get_worst_stops,
     list_tables,
@@ -60,29 +62,36 @@ def get_raw_table_overview() -> list[dict[str, Any]]:
 
 @mcp.tool()
 def get_top_delay_days(limit: int = 10) -> str:
-    """Return the days on Line 1 with the highest total positive departure delay."""
+    """Return the days on Line 1 with the highest trip-level delay; stop-level burden is included separately."""
     rows = get_days_with_most_delays(limit=limit)
     return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def get_delay_by_weekday() -> str:
-    """Return delay metrics grouped by weekday."""
-    rows = get_delays_by_weekday()
+def get_delay_by_weekday(order: str = "highest") -> str:
+    """Return stop-level delay burden grouped by weekday. order='lowest' for least delayed days first, 'highest' (default) for most delayed."""
+    rows = get_delays_by_weekday(order=order)
     return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def get_delay_by_hour() -> str:
-    """Return delay metrics grouped by planned departure hour."""
+    """Return stop-level delay burden grouped by planned departure hour across the dataset."""
     rows = get_delays_by_hour()
     return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def get_delay_hotspot_stops(limit: int = 10) -> str:
-    """Return stops with the highest total positive departure delay."""
-    rows = get_worst_stops(limit=limit)
+def get_delay_hotspot_stops(limit: int = 10, service_date: str | None = None) -> str:
+    """Return stop-level delay hot spots. Pass service_date='YYYY-MM-DD' for day-specific answers."""
+    rows = get_worst_stops(limit=limit, service_date=service_date)
+    return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_stop_delay_extremes(order: str = "lowest", limit: int = 10, min_events: int = 1) -> str:
+    """Return stops with the lowest or highest average positive delay overall."""
+    rows = get_stop_delay_extremes_rows(order=order, limit=limit, min_events=min_events)
     return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
 
 
@@ -143,6 +152,45 @@ def answer_reliability_question(question: str) -> str:
     """Answer a supported natural-language reliability question using deterministic analytics only."""
     response = answer_transport_question(question)
     return json.dumps(response, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def delay_ranking(
+    group_by: str = "stop",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    weekday_only: bool = False,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    stop_name: str | None = None,
+    direction: str | None = None,
+    order: str = "highest",
+    limit: int = 10,
+) -> str:
+    """Flexible delay ranking with filters.
+
+    group_by: what to rank. One of: stop, weekday, hour, date, corridor, direction.
+    date_from/date_to: restrict to a date range (YYYY-MM-DD).
+    weekday_only: true to exclude Saturday/Sunday.
+    hour_from/hour_to: restrict to planned departure hours (0-23).
+    stop_name: filter to a specific stop.
+    direction: filter to corridors involving this stop name.
+    order: 'highest' (most delay first) or 'lowest' (least delay first).
+    limit: max results (1-50).
+    """
+    rows = get_delay_ranking(
+        group_by=group_by,
+        date_from=date_from,
+        date_to=date_to,
+        weekday_only=weekday_only or None,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        stop_name=stop_name,
+        direction=direction,
+        order=order,
+        limit=limit,
+    )
+    return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
