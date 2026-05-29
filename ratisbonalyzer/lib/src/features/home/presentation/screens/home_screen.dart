@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
@@ -13,6 +14,9 @@ import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart
 import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
+import 'package:ratisbonalyzer/src/features/home/domain/models/weather_record.dart';
+import 'package:ratisbonalyzer/src/features/home/data/services/weather_parser.dart';
+import 'package:ratisbonalyzer/src/core/timezone_utils.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -110,6 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, List<RvvRecord>> _busTimelines = {};
   List<_BusPlaybackState> _activeBuses = [];
   Map<String, Stop> _stopMapByName = {};
+  Map<DateTime, WeatherRecord> _weatherRecords = {};
 
   @override
   void initState() {
@@ -133,6 +138,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _gtfsService.loadStopTimes(),
         _gtfsService.loadShapes(),
         _rvvRecordService.loadAllRecFiles(),
+        rootBundle.loadString(Assets.weather.weatherRegensburgAll),
       ]);
 
       final stops = results[0] as List<Stop>;
@@ -141,6 +147,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final stopTimes = results[3] as List<StopTime>;
       final shapeMap = results[4] as Map<String, List<LatLng>>;
       final recFiles = results[5] as Map<String, List<RvvRecord>>;
+      final weatherCsv = results[6] as String;
+      final weatherRecords = WeatherParser.parseWeather(weatherCsv);
 
       if (!mounted) return;
 
@@ -270,6 +278,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _allRoutes = allRoutes;
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
         _recFiles = recFiles;
+        _weatherRecords = weatherRecords;
         _selectedRecFile = recFiles.keys.isNotEmpty
             ? recFiles.keys.first
             : null;
@@ -696,6 +705,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _startPlayback() {
     if (_playbackTimer != null) return;
+    if (_currentPlaybackTime != null &&
+        _lastTimestamp != null &&
+        _firstTimestamp != null) {
+      if (_currentPlaybackTime!.isAfter(_lastTimestamp!) ||
+          _currentPlaybackTime!.isAtSameMomentAs(_lastTimestamp!)) {
+        _currentPlaybackTime = _firstTimestamp;
+      }
+    }
     setState(() {
       _isPlaying = true;
     });
@@ -711,8 +728,9 @@ class _HomeScreenState extends State<HomeScreen> {
         Duration(seconds: advanceSeconds),
       );
       if (newTime.isAfter(_lastTimestamp!)) {
+        _pausePlayback();
         setState(() {
-          _currentPlaybackTime = _firstTimestamp;
+          _currentPlaybackTime = _lastTimestamp;
           _updateActiveBuses();
         });
       } else {
@@ -771,6 +789,28 @@ class _HomeScreenState extends State<HomeScreen> {
         .difference(_firstTimestamp!)
         .inSeconds;
     return (elapsed / total).clamp(0.0, 1.0);
+  }
+
+  WeatherRecord? get _currentWeather {
+    if (_currentPlaybackTime == null || _weatherRecords.isEmpty) return null;
+
+    // Convert playback time (German local) to UTC
+    final utcTime = TimezoneUtils.convertGermanLocalToUtc(_currentPlaybackTime!);
+    
+    // Find closest hourly weather record
+    final target = DateTime.utc(utcTime.year, utcTime.month, utcTime.day, utcTime.hour);
+    final direct = _weatherRecords[target];
+    if (direct != null) return direct;
+
+    // Fallback 1: check offset by 1 hour backwards
+    final prev = _weatherRecords[target.subtract(const Duration(hours: 1))];
+    if (prev != null) return prev;
+
+    // Fallback 2: check offset by 1 hour forwards
+    final next = _weatherRecords[target.add(const Duration(hours: 1))];
+    if (next != null) return next;
+
+    return null;
   }
 
   @override
@@ -897,6 +937,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          if (!_isLoading && _weatherRecords.isNotEmpty)
+            Positioned(
+              top: 16,
+              right: 16,
+              child: _WeatherOverlay(weather: _currentWeather),
+            ),
           Positioned(
             top: 16,
             left: 16,
@@ -1453,6 +1499,162 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],
+      ),
+    );
+  }
+}
+
+class _WeatherOverlay extends StatelessWidget {
+  final WeatherRecord? weather;
+
+  const _WeatherOverlay({required this.weather});
+
+  @override
+  Widget build(BuildContext context) {
+    if (weather == null) {
+      return const SizedBox.shrink();
+    }
+
+    final theme = Theme.of(context);
+
+    return Card(
+      elevation: 6,
+      shadowColor: Colors.black.withValues(alpha: 0.15),
+      color: theme.colorScheme.surface.withValues(alpha: 0.85),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: theme.colorScheme.primary.withValues(alpha: 0.15),
+          width: 1,
+        ),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        constraints: const BoxConstraints(maxWidth: 200),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: weather!.conditionColor.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    weather!.conditionIcon,
+                    color: weather!.conditionColor,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${weather!.temp.toStringAsFixed(1)}°C',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      Text(
+                        weather!.conditionDescription,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (weather!.rhum != null ||
+                weather!.wspd != null ||
+                (weather!.prcp != null && weather!.prcp! > 0)) ...[
+              const Divider(height: 16, thickness: 1),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  if (weather!.rhum != null)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.water_drop_outlined,
+                          size: 13,
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.7,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${weather!.rhum!.toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (weather!.wspd != null)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.air_outlined,
+                          size: 13,
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.7,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${weather!.wspd!.toStringAsFixed(0)} km/h',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (weather!.prcp != null && weather!.prcp! > 0)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.umbrella_outlined,
+                          size: 13,
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.7,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${weather!.prcp!.toStringAsFixed(1)} mm',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
