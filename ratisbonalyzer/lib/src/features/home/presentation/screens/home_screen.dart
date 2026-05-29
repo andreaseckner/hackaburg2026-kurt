@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ratisbonalyzer/src/core/assets.gen.dart';
 import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
@@ -9,7 +10,9 @@ import 'package:ratisbonalyzer/src/features/chat/bloc/chat_bloc.dart';
 import 'package:ratisbonalyzer/src/features/chat/widgets/chat_panel.dart';
 import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart';
+import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
+import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
 
 class _RouteData {
   final String routeId;
@@ -48,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const double _stopMarkerSize = 24.0;
 
   final GtfsService _gtfsService = GtfsService();
+  final RvvRecordService _rvvRecordService = RvvRecordService();
   final MapController _mapController = MapController();
   final ChatBloc _chatBloc = ChatBloc();
   double _currentZoom = _initialZoom;
@@ -61,6 +65,12 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _chatPanelOpen = false;
   bool _chatButtonHovered = false;
   Set<String> _selectedRouteIds = {};
+
+  Map<String, List<RvvRecord>> _recFiles = {};
+  String? _selectedRecFile;
+  DateTime? _selectedDay;
+  DateTime? _firstTimestamp;
+  DateTime? _lastTimestamp;
 
   @override
   void initState() {
@@ -76,11 +86,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadData() async {
     try {
-      final stops = await _gtfsService.loadStops();
-      final routes = await _gtfsService.loadRoutes();
-      final trips = await _gtfsService.loadTrips();
-      final stopTimes = await _gtfsService.loadStopTimes();
-      final shapeMap = await _gtfsService.loadShapes();
+      final results = await Future.wait([
+        _gtfsService.loadStops(),
+        _gtfsService.loadRoutes(),
+        _gtfsService.loadTrips(),
+        _gtfsService.loadStopTimes(),
+        _gtfsService.loadShapes(),
+        _rvvRecordService.loadAllRecFiles(),
+      ]);
+
+      final stops = results[0] as List<Stop>;
+      final routes = results[1] as List<RouteInfo>;
+      final trips = results[2] as List<Trip>;
+      final stopTimes = results[3] as List<StopTime>;
+      final shapeMap = results[4] as Map<String, List<LatLng>>;
+      final recFiles = results[5] as Map<String, List<RvvRecord>>;
 
       if (!mounted) return;
 
@@ -189,7 +209,19 @@ class _HomeScreenState extends State<HomeScreen> {
         _stops = stops;
         _allRoutes = allRoutes;
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
+        _recFiles = recFiles;
+        _selectedRecFile = recFiles.keys.isNotEmpty
+            ? recFiles.keys.first
+            : null;
         _isLoading = false;
+
+        if (_selectedRecFile != null) {
+          final days = _getDaysForSelectedDataset();
+          if (days.isNotEmpty) {
+            _selectedDay = days.first;
+            _updateTimestamps();
+          }
+        }
       });
     } catch (e) {
       debugPrint('Error loading GTFS data: $e');
@@ -246,6 +278,65 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _closeChatPanel() {
     setState(() => _chatPanelOpen = false);
+  }
+
+  List<DateTime> _getDaysForSelectedDataset() {
+    if (_selectedRecFile == null || !_recFiles.containsKey(_selectedRecFile)) {
+      return [];
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final days = records.map((r) => r.operationDay).toSet().toList();
+    days.sort();
+    return days;
+  }
+
+  void _updateTimestamps() {
+    if (_selectedRecFile == null || _selectedDay == null) {
+      _firstTimestamp = null;
+      _lastTimestamp = null;
+      return;
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final dayRecords = records
+        .where((r) => r.operationDay == _selectedDay)
+        .toList();
+    if (dayRecords.isEmpty) {
+      _firstTimestamp = null;
+      _lastTimestamp = null;
+      return;
+    }
+
+    DateTime minT = dayRecords.first.arrivalHalt;
+    DateTime maxT = dayRecords.first.departureHalt;
+    for (var r in dayRecords) {
+      if (r.arrivalHalt.isBefore(minT)) minT = r.arrivalHalt;
+      if (r.departureHalt.isAfter(maxT)) maxT = r.departureHalt;
+    }
+
+    _firstTimestamp = minT;
+    _lastTimestamp = maxT;
+  }
+
+  void _onRecFileChanged(String? newFile) {
+    if (newFile == null) return;
+    setState(() {
+      _selectedRecFile = newFile;
+      final days = _getDaysForSelectedDataset();
+      if (days.isNotEmpty) {
+        _selectedDay = days.first;
+      } else {
+        _selectedDay = null;
+      }
+      _updateTimestamps();
+    });
+  }
+
+  void _onDayChanged(DateTime? newDay) {
+    if (newDay == null) return;
+    setState(() {
+      _selectedDay = newDay;
+      _updateTimestamps();
+    });
   }
 
   @override
@@ -518,6 +609,196 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: ChatPanel(
                   height: chatPanelHeight,
                   onClose: _closeChatPanel,
+                ),
+              ),
+            ),
+          if (!_isLoading && _recFiles.isNotEmpty)
+            Positioned(
+              left: 16,
+              right: 104,
+              bottom: 16,
+              child: Card(
+                elevation: 6,
+                shadowColor: Colors.black.withValues(alpha: 0.15),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.tune_outlined,
+                            color: theme.colorScheme.primary,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Playback Controls',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _selectedRecFile,
+                                icon: const Icon(Icons.arrow_drop_down),
+                                isDense: true,
+                                focusColor: Colors.transparent,
+                                items: _recFiles.keys.map((filename) {
+                                  return DropdownMenuItem<String>(
+                                    value: filename,
+                                    child: Text(
+                                      filename,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: _onRecFileChanged,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<DateTime>(
+                                value: _selectedDay,
+                                icon: const Icon(
+                                  Icons.calendar_today,
+                                  size: 14,
+                                ),
+                                isDense: true,
+                                focusColor: Colors.transparent,
+                                items: _getDaysForSelectedDataset().map((day) {
+                                  return DropdownMenuItem<DateTime>(
+                                    value: day,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                        right: 8.0,
+                                      ),
+                                      child: Text(
+                                        DateFormat('dd.MM.yyyy').format(day),
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: _onDayChanged,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Text(
+                            _firstTimestamp != null
+                                ? DateFormat(
+                                    'HH:mm:ss',
+                                  ).format(_firstTimestamp!)
+                                : '--:--:--',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                activeTrackColor: theme.colorScheme.primary,
+                                inactiveTrackColor: theme.colorScheme.primary
+                                    .withValues(alpha: 0.12),
+                                thumbColor: theme.colorScheme.primary,
+                                thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 6,
+                                ),
+                                overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 14,
+                                ),
+                                disabledActiveTrackColor: theme
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.4),
+                                disabledInactiveTrackColor: theme
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.12),
+                                disabledThumbColor: theme.colorScheme.primary
+                                    .withValues(alpha: 0.5),
+                              ),
+                              child: const Slider(value: 0.0, onChanged: null),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            _lastTimestamp != null
+                                ? DateFormat('HH:mm:ss').format(_lastTimestamp!)
+                                : '--:--:--',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.bold,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
