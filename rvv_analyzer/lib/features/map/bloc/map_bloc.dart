@@ -9,6 +9,7 @@ import 'package:rvv_analyzer/gtfs/models/recorded_stop_event.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_stop.dart';
 import 'package:rvv_analyzer/gtfs/tools/gtfs_parser.dart';
 import 'package:rvv_analyzer/gtfs/tools/recorded_data_parser.dart';
+import 'package:rvv_analyzer/gtfs/tools/weather_parser.dart';
 
 class MapBloc extends Bloc<MapEvent, MapState> {
   Timer? _playbackTimer;
@@ -45,6 +46,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       final csvRoutes = await rootBundle.loadString(Assets.gtfs.routes);
       final csvShapes = await rootBundle.loadString(Assets.gtfs.shapes);
       final csvRecording = await rootBundle.loadString(Assets.rec.october2024);
+      final csvWeather = await rootBundle.loadString(Assets.weather.weatherRegensburgAll);
 
       final stops = GtfsParser.parseStops(csvStops);
       final shapes = GtfsParser.parseShapes(csvShapes);
@@ -57,6 +59,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       );
 
       final recordedEvents = RecordedDataParser.parseRecording(csvRecording);
+      final weatherRecords = WeatherParser.parseWeather(csvWeather);
       
       // Extract available days
       final availableDays = recordedEvents
@@ -85,6 +88,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
         recordedEvents: recordedEvents,
         stopNameLookup: stopNameLookup,
         availableDays: availableDays,
+        weatherRecords: weatherRecords,
       );
 
       if (selectedDay != null) {
@@ -136,6 +140,21 @@ class MapBloc extends Bloc<MapEvent, MapState> {
 
   void _onPlaybackStarted(MapPlaybackStarted event, Emitter<MapState> emit) {
     _playbackTimer?.cancel();
+    
+    DateTime? playbackTime = state.currentPlaybackTime;
+    final eventsForDay = state.currentDayEvents.values.expand((e) => e).toList();
+    if (eventsForDay.isNotEmpty && playbackTime != null) {
+      final endTime = eventsForDay
+          .map((e) => e.departureTimeActual)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      if (playbackTime.isAfter(endTime) || playbackTime.isAtSameMomentAs(endTime)) {
+        final startTime = eventsForDay
+            .map((e) => e.arrivalTimeActual)
+            .reduce((a, b) => a.isBefore(b) ? a : b);
+        playbackTime = startTime;
+      }
+    }
+
     _playbackTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (state.currentPlaybackTime != null) {
         final newTime = state.currentPlaybackTime!.add(
@@ -144,7 +163,10 @@ class MapBloc extends Bloc<MapEvent, MapState> {
         add(MapTickerTicked(newTime));
       }
     });
-    emit(state.copyWith(isPlaying: true));
+    emit(state.copyWith(
+      isPlaying: true,
+      currentPlaybackTime: playbackTime,
+    ));
   }
 
   void _onPlaybackPaused(MapPlaybackPaused event, Emitter<MapState> emit) {
@@ -167,6 +189,20 @@ class MapBloc extends Bloc<MapEvent, MapState> {
   }
 
   void _onTickerTicked(MapTickerTicked event, Emitter<MapState> emit) {
+    final eventsForDay = state.currentDayEvents.values.expand((e) => e).toList();
+    if (eventsForDay.isNotEmpty) {
+      final endTime = eventsForDay
+          .map((e) => e.departureTimeActual)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      if (event.time.isAfter(endTime)) {
+        _playbackTimer?.cancel();
+        emit(state.copyWith(
+          currentPlaybackTime: endTime,
+          isPlaying: false,
+        ));
+        return;
+      }
+    }
     emit(state.copyWith(currentPlaybackTime: event.time));
   }
 

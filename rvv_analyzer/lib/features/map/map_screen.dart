@@ -9,6 +9,7 @@ import 'package:rvv_analyzer/features/map/bloc/map_bloc.dart';
 import 'package:rvv_analyzer/features/map/bloc/map_event.dart';
 import 'package:rvv_analyzer/features/map/bloc/map_state.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_connection.dart';
+import 'package:rvv_analyzer/features/map/models/weather_record.dart';
 
 class MapScreen extends StatelessWidget {
   const MapScreen({super.key});
@@ -196,6 +197,14 @@ class _MapViewState extends State<_MapView> with SingleTickerProviderStateMixin 
               if (state.status == MapStatus.loading)
                 const Center(child: CircularProgressIndicator()),
               _PlaybackControlPanel(state: state),
+
+              // Weather Overlay
+              if (state.status == MapStatus.loaded)
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  child: _WeatherOverlay(state: state),
+                ),
 
               // Stats Toggle Button
               if (state.vizMode == VisualizationMode.heatmap)
@@ -735,6 +744,99 @@ class _SortChip extends StatelessWidget {
         onSelected: (_) => onSelected(),
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
         visualDensity: VisualDensity.compact,
+      ),
+    );
+  }
+}
+
+class _WeatherOverlay extends StatelessWidget {
+  final MapState state;
+
+  const _WeatherOverlay({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final WeatherRecord? weather = state.currentWeather;
+    if (weather == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      elevation: 4,
+      color: Colors.white.withValues(alpha: 0.95),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  weather.conditionIcon,
+                  color: weather.conditionColor,
+                  size: 32,
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${weather.temp.toStringAsFixed(1)}°C',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    Text(
+                      weather.conditionDescription,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (weather.rhum != null) ...[
+                  const Icon(Icons.water_drop, size: 12, color: Colors.blueGrey),
+                  const SizedBox(width: 2),
+                  Text(
+                    '${weather.rhum!.toStringAsFixed(0)}%',
+                    style: const TextStyle(fontSize: 10, color: Colors.black54),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                if (weather.wspd != null) ...[
+                  const Icon(Icons.air, size: 12, color: Colors.blueGrey),
+                  const SizedBox(width: 2),
+                  Text(
+                    '${weather.wspd!.toStringAsFixed(1)} km/h',
+                    style: const TextStyle(fontSize: 10, color: Colors.black54),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                if (weather.prcp != null && weather.prcp! > 0) ...[
+                  const Icon(Icons.umbrella, size: 12, color: Colors.blueGrey),
+                  const SizedBox(width: 2),
+                  Text(
+                    '${weather.prcp!.toStringAsFixed(1)} mm',
+                    style: const TextStyle(fontSize: 10, color: Colors.black54),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
