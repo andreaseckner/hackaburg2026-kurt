@@ -8,11 +8,14 @@ from mcp.server.fastmcp import FastMCP
 from core.analytics import (
     compare_directions,
     describe_table,
+    explain_pain_points_for_day,
     get_bottleneck_stops,
+    get_corridor_pain_points,
     get_days_with_most_delays,
     get_delays_by_hour,
     get_delays_by_weekday,
     get_early_departures,
+    get_segment_delay_growth_hotspots,
     get_trip_delay_summary,
     get_worst_stops,
     list_tables,
@@ -108,6 +111,30 @@ def explain_trip_delay_for_day(service_date: str = "2024-12-12") -> str:
     """Return easy-to-understand trip-level delay minutes/hours for one day."""
     summary = get_trip_delay_summary(service_date=service_date)
     return json.dumps(summary, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_corridor_reliability_pain_points(limit: int = 10) -> str:
+    """Rank from-to route corridors by recurring delay burden and delayed-event rate."""
+    rows = get_corridor_pain_points(limit=limit)
+    return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_delay_growth_segments(limit: int = 10, min_growth_1min_events: int = 100) -> str:
+    """Return stop-to-stop segments where buses repeatedly gain delay inside trips."""
+    rows = get_segment_delay_growth_hotspots(
+        limit=limit,
+        min_growth_1min_events=min_growth_1min_events,
+    )
+    return json.dumps(rows, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def explain_reliability_pain_points_for_day(service_date: str = "2024-12-12") -> str:
+    """Return a demo-ready day story: worst corridor, hour, stops, and trip-level delay."""
+    story = explain_pain_points_for_day(service_date=service_date)
+    return json.dumps(story, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()

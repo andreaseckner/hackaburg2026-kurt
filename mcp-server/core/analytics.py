@@ -347,3 +347,247 @@ def get_trip_delay_summary(db_path: str | None = None, service_date: str = "2024
         "Stop-level delay counts delay at every stop and is useful for system burden, but is harder for people to interpret."
     )
     return summary
+
+
+def get_corridor_pain_points(db_path: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    """Rank directional route corridors by recurring delay pain."""
+    limit = _limit(limit)
+    sql = """
+        SELECT
+          direction_id,
+          route_start,
+          route_end,
+          COUNT(*) AS event_count,
+          COUNT(DISTINCT service_date) AS service_days,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_delayed_3min
+        FROM departure_delay_events
+        WHERE route_start IS NOT NULL AND route_end IS NOT NULL
+        GROUP BY direction_id, route_start, route_end
+        ORDER BY total_stop_delay_minutes DESC
+        LIMIT ?
+    """
+    rows = _query(db_path, sql, [limit])
+    for row in rows:
+        params = [row["direction_id"], row["route_start"], row["route_end"]]
+        worst_hour = _query(
+            db_path,
+            """
+            SELECT
+              CAST(planned_departure_hour AS INTEGER) AS hour,
+              ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+              SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events
+            FROM departure_delay_events
+            WHERE direction_id = ? AND route_start = ? AND route_end = ?
+              AND planned_departure_hour IS NOT NULL
+            GROUP BY planned_departure_hour
+            ORDER BY total_stop_delay_minutes DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        worst_day = _query(
+            db_path,
+            """
+            SELECT
+              service_date,
+              weekday_name,
+              ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+              SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events
+            FROM departure_delay_events
+            WHERE direction_id = ? AND route_start = ? AND route_end = ?
+            GROUP BY service_date, weekday_name
+            ORDER BY total_stop_delay_minutes DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        row["worst_hour"] = worst_hour[0] if worst_hour else None
+        row["worst_day"] = worst_day[0] if worst_day else None
+    return rows
+
+
+def get_segment_delay_growth_hotspots(
+    db_path: str | None = None,
+    limit: int = 10,
+    min_growth_1min_events: int = 100,
+) -> list[dict[str, Any]]:
+    """Find route segments where buses repeatedly gain delay inside a trip."""
+    limit = _limit(limit)
+    min_growth_1min_events = max(1, int(min_growth_1min_events))
+    sql = """
+        WITH trip_starts AS (
+          SELECT
+            service_date,
+            line_id,
+            direction_id,
+            run_id,
+            route_start,
+            route_start_code,
+            route_end,
+            route_end_code,
+            planned_departure AS trip_start_time,
+            LEAD(planned_departure) OVER (
+              PARTITION BY service_date, line_id, direction_id, run_id, route_start, route_end
+              ORDER BY planned_departure
+            ) AS next_trip_start_time
+          FROM departure_delay_events
+          WHERE stop_name = route_start OR stop_code = route_start_code
+        ),
+        trip_events AS (
+          SELECT
+            t.service_date,
+            t.line_id,
+            t.direction_id,
+            t.run_id,
+            t.route_start,
+            t.route_end,
+            t.trip_start_time,
+            e.stop_name,
+            e.stop_code,
+            e.planned_departure,
+            e.departure_delay_seconds
+          FROM trip_starts t
+          JOIN departure_delay_events e
+            ON e.service_date = t.service_date
+           AND e.line_id = t.line_id
+           AND e.direction_id = t.direction_id
+           AND e.run_id = t.run_id
+           AND e.route_start = t.route_start
+           AND e.route_end = t.route_end
+           AND e.planned_departure >= t.trip_start_time
+           AND (t.next_trip_start_time IS NULL OR e.planned_departure < t.next_trip_start_time)
+        ),
+        sequenced AS (
+          SELECT
+            *,
+            LAG(stop_name) OVER trip_window AS previous_stop,
+            LAG(stop_code) OVER trip_window AS previous_stop_code,
+            departure_delay_seconds - LAG(departure_delay_seconds) OVER trip_window AS delay_growth_seconds
+          FROM trip_events
+          WINDOW trip_window AS (
+            PARTITION BY service_date, line_id, direction_id, run_id, route_start, route_end, trip_start_time
+            ORDER BY planned_departure
+          )
+        )
+        SELECT
+          route_start,
+          route_end,
+          COALESCE(previous_stop_code, previous_stop) AS previous_stop,
+          previous_stop AS previous_stop_abbrev,
+          COALESCE(stop_code, stop_name) AS current_stop,
+          stop_name AS current_stop_abbrev,
+          COUNT(*) AS segment_events,
+          ROUND(AVG(delay_growth_seconds), 1) AS avg_growth_seconds,
+          ROUND(SUM(GREATEST(delay_growth_seconds, 0)) / 60.0, 1) AS total_positive_growth_minutes,
+          SUM(CASE WHEN delay_growth_seconds >= 60 THEN 1 ELSE 0 END) AS growth_1min_events
+        FROM sequenced
+        WHERE delay_growth_seconds IS NOT NULL
+          AND previous_stop IS NOT NULL
+          AND stop_name IS NOT NULL
+        GROUP BY route_start, route_end, previous_stop, previous_stop_code, stop_name, stop_code
+        HAVING growth_1min_events >= ?
+        ORDER BY total_positive_growth_minutes DESC, avg_growth_seconds DESC
+        LIMIT ?
+    """
+    return _query(db_path, sql, [min_growth_1min_events, limit])
+
+
+def explain_pain_points_for_day(db_path: str | None = None, service_date: str = "2024-12-12") -> dict[str, Any]:
+    """Return a compact, demo-ready explanation of one day's main reliability pain points."""
+    trip_summary = get_trip_delay_summary(db_path, service_date=service_date)
+    corridors = _query(
+        db_path,
+        """
+        SELECT
+          service_date,
+          weekday_name,
+          direction_id,
+          route_start,
+          route_end,
+          COUNT(*) AS event_count,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds
+        FROM departure_delay_events
+        WHERE service_date = ?
+        GROUP BY service_date, weekday_name, direction_id, route_start, route_end
+        ORDER BY total_stop_delay_minutes DESC
+        LIMIT 1
+        """,
+        [service_date],
+    )
+    hours = _query(
+        db_path,
+        """
+        SELECT
+          CAST(planned_departure_hour AS INTEGER) AS hour,
+          COUNT(*) AS event_count,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds
+        FROM departure_delay_events
+        WHERE service_date = ? AND planned_departure_hour IS NOT NULL
+        GROUP BY planned_departure_hour
+        ORDER BY total_stop_delay_minutes DESC
+        LIMIT 1
+        """,
+        [service_date],
+    )
+    stops = _query(
+        db_path,
+        """
+        SELECT
+          COALESCE(stop_code, stop_name) AS stop_name,
+          stop_name AS stop_abbrev,
+          stop_point,
+          direction_id,
+          route_start,
+          route_end,
+          COUNT(*) AS event_count,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds
+        FROM departure_delay_events
+        WHERE service_date = ? AND stop_name IS NOT NULL
+        GROUP BY stop_name, stop_code, stop_point, direction_id, route_start, route_end
+        ORDER BY total_stop_delay_minutes DESC
+        LIMIT 5
+        """,
+        [service_date],
+    )
+
+    worst_corridor = corridors[0] if corridors else None
+    worst_hour = hours[0] if hours else None
+    if not worst_corridor:
+        return {
+            "service_date": service_date,
+            "trip_summary": trip_summary,
+            "plain_language_summary": "No pain points found for this date.",
+        }
+
+    stop_names = ", ".join(stop["stop_name"] for stop in stops[:3])
+    summary = (
+        f"On {worst_corridor['service_date']}, the biggest reliability pain was "
+        f"{worst_corridor['route_start']} → {worst_corridor['route_end']}"
+    )
+    if worst_hour:
+        summary += f" around {worst_hour['hour']}:00"
+    if stop_names:
+        summary += f", especially near {stop_names}"
+    summary += "."
+
+    return {
+        "service_date": worst_corridor["service_date"],
+        "trip_summary": trip_summary,
+        "worst_corridor": worst_corridor,
+        "worst_hour": worst_hour,
+        "worst_stops": stops,
+        "plain_language_summary": summary,
+        "metric_explanation": (
+            "This combines trip-level delay for human scale with stop, corridor, and hour rollups "
+            "to locate where the reliability problem concentrates. It identifies where/when, not the external cause."
+        ),
+    }
