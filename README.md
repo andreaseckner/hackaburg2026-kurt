@@ -19,10 +19,13 @@ The project combines:
 
 ```text
 .
-├── ratisbonalyzer/   # Flutter app
+├── ratisbonalyzer/   # Flutter app (v2 — clean rewrite)
+├── rvv_analyzer/     # Flutter app (v1 — first iteration, kept for reference)
 ├── mcp-server/       # Python analytics API + MCP tools + DuckDB ingest scripts
 └── docs/             # Planning and project notes
 ```
+
+`rvv_analyzer/` was the first iteration of the Flutter app. It grew too large and unstructured too fast, so we started fresh with `ratisbonalyzer/` — a focused, clean rewrite with proper separation of concerns.
 
 ## Prerequisites
 
