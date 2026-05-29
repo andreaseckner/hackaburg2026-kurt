@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:rvv_analyzer/features/map/bloc/map_state.dart';
 
 abstract class MapEvent extends Equatable {
   const MapEvent();
@@ -72,4 +73,13 @@ class MapDaySelected extends MapEvent {
 
   @override
   List<Object?> get props => [day];
+}
+
+class MapVisualizationModeChanged extends MapEvent {
+  final VisualizationMode mode;
+
+  const MapVisualizationModeChanged(this.mode);
+
+  @override
+  List<Object?> get props => [mode];
 }

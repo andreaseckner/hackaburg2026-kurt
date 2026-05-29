@@ -22,14 +22,40 @@ class MapScreen extends StatelessWidget {
   }
 }
 
-class _MapView extends StatelessWidget {
+enum DelaySortOption { count, max, average }
+
+class _MapView extends StatefulWidget {
+  const _MapView();
+
+  @override
+  State<_MapView> createState() => _MapViewState();
+}
+
+class _MapViewState extends State<_MapView> with SingleTickerProviderStateMixin {
   // Map Config
   static const LatLng _initialCenter = LatLng(49.0134, 12.1016); // Regensburg
   static const String _osmUrlTemplate =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   static const String _userAgentPackage = 'de.rvv.rvv_analyzer';
 
-  const _MapView();
+  late AnimationController _blinkController;
+  bool _isStatsPanelVisible = false;
+  DelaySortOption _sortOption = DelaySortOption.count;
+
+  @override
+  void initState() {
+    super.initState();
+    _blinkController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _blinkController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +88,9 @@ class _MapView extends StatelessWidget {
               );
         }).toList();
 
+        final aggregatedDelays = state.aggregatedDelays;
+        final blinkingBuses = state.blinkingBuses;
+
         return Scaffold(
           appBar: AppBar(
             title: Text(l10n.appTitle),
@@ -90,15 +119,16 @@ class _MapView extends StatelessWidget {
                     urlTemplate: _osmUrlTemplate,
                     userAgentPackageName: _userAgentPackage,
                   ),
-                  PolylineLayer(
-                    polylines: state.filteredConnections.map((conn) {
-                      return Polyline(
-                        points: conn.points,
-                        color: conn.color.withAlpha(Dimens.polylineAlpha),
-                        strokeWidth: Dimens.polylineStrokeWidth,
-                      );
-                    }).toList(),
-                  ),
+                  if (state.vizMode != VisualizationMode.heatmap)
+                    PolylineLayer(
+                      polylines: state.filteredConnections.map((conn) {
+                        return Polyline(
+                          points: conn.points,
+                          color: conn.color.withAlpha(Dimens.polylineAlpha),
+                          strokeWidth: Dimens.polylineStrokeWidth,
+                        );
+                      }).toList(),
+                    ),
                   // Stop Markers
                   MarkerLayer(
                     markers: state.allStops.map((stop) {
@@ -114,52 +144,82 @@ class _MapView extends StatelessWidget {
                       );
                     }).toList(),
                   ),
-                  // Active Vehicle Markers
+                  // Heatmap Persistence Layer (Aggregated Stop Delays)
+                  if (state.vizMode == VisualizationMode.heatmap)
+                    CircleLayer(
+                      circles: aggregatedDelays.map((agg) {
+                        return CircleMarker(
+                          point: agg.location,
+                          color: agg.color.withValues(alpha: agg.opacity),
+                          borderStrokeWidth: 0,
+                          useRadiusInMeter: false,
+                          radius: agg.radius,
+                        );
+                      }).toList(),
+                    ),
+                  // Active UI Layer (Moving Buses or Blinking New Arrivals)
                   MarkerLayer(
-                    markers: activeVehicles.map((v) {
-                      Color color = Colors.green;
-                      if (v.delaySeconds > 300) {
-                        color = Colors.red;
-                      } else if (v.delaySeconds > 60) {
-                        color = Colors.orange;
-                      }
+                    markers: [
+                      if (state.vizMode == VisualizationMode.buses)
+                        ...activeVehicles.map((v) {
+                          Color color = Colors.green;
+                          if (v.delaySeconds > 300) {
+                            color = Colors.red;
+                          } else if (v.delaySeconds > 60) {
+                            color = Colors.orange;
+                          }
 
-                      return Marker(
-                        point: v.location,
-                        width: 32,
-                        height: 32,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.3),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              v.lineId,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
+                          return Marker(
+                            point: v.location,
+                            width: 32,
+                            height: 32,
+                            child: _BusMarker(color: color, lineId: v.lineId),
+                          );
+                        }),
+                      if (state.vizMode == VisualizationMode.heatmap && state.isPlaying)
+                        ...blinkingBuses.map((bus) {
+                          return Marker(
+                            point: bus.location,
+                            width: 32,
+                            height: 32,
+                            child: FadeTransition(
+                              opacity: _blinkController,
+                              child: _BusMarker(
+                                  color: bus.color, lineId: bus.lineId),
                             ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
+                          );
+                        }),
+                    ],
                   ),
                 ],
               ),
               if (state.status == MapStatus.loading)
                 const Center(child: CircularProgressIndicator()),
               _PlaybackControlPanel(state: state),
+
+              // Stats Toggle Button
+              if (state.vizMode == VisualizationMode.heatmap)
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: FloatingActionButton.small(
+                    onPressed: () => setState(() => _isStatsPanelVisible = !_isStatsPanelVisible),
+                    backgroundColor: Colors.white.withValues(alpha: 0.9),
+                    child: Icon(
+                      _isStatsPanelVisible ? Icons.close : Icons.analytics,
+                      color: Colors.blueGrey,
+                    ),
+                  ),
+                ),
+
+              // Right Side Stats Panel
+              if (state.vizMode == VisualizationMode.heatmap)
+                _RightDelayStatsPanel(
+                  aggregatedDelays: aggregatedDelays,
+                  isVisible: _isStatsPanelVisible,
+                  sortOption: _sortOption,
+                  onSortChanged: (option) => setState(() => _sortOption = option),
+                ),
             ],
           ),
         );
@@ -295,6 +355,41 @@ class _MapView extends StatelessWidget {
   }
 }
 
+class _BusMarker extends StatelessWidget {
+  final Color color;
+  final String lineId;
+
+  const _BusMarker({required this.color, required this.lineId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          lineId,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlaybackControlPanel extends StatelessWidget {
   final MapState state;
 
@@ -336,10 +431,34 @@ class _PlaybackControlPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: SegmentedButton<VisualizationMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: VisualizationMode.buses,
+                      label: Text('Buses'),
+                      icon: Icon(Icons.directions_bus),
+                    ),
+                    ButtonSegment(
+                      value: VisualizationMode.heatmap,
+                      label: Text('Heatmap'),
+                      icon: Icon(Icons.local_fire_department),
+                    ),
+                  ],
+                  selected: {state.vizMode},
+                  onSelectionChanged: (Set<VisualizationMode> newSelection) {
+                    context.read<MapBloc>().add(
+                          MapVisualizationModeChanged(newSelection.first),
+                        );
+                  },
+                ),
+              ),
               Row(
                 children: [
                   IconButton(
-                    icon: Icon(state.isPlaying ? Icons.pause : Icons.play_arrow),
+                    icon:
+                        Icon(state.isPlaying ? Icons.pause : Icons.play_arrow),
                     color: Theme.of(context).primaryColor,
                     onPressed: () {
                       if (state.isPlaying) {
@@ -364,8 +483,12 @@ class _PlaybackControlPanel extends StatelessWidget {
                   ),
                   Expanded(
                     child: Slider(
-                      value: currentOffset.toDouble().clamp(0, totalDuration.toDouble()),
-                      max: totalDuration.toDouble() > 0 ? totalDuration.toDouble() : 1.0,
+                      value: currentOffset
+                          .toDouble()
+                          .clamp(0, totalDuration.toDouble()),
+                      max: totalDuration.toDouble() > 0
+                          ? totalDuration.toDouble()
+                          : 1.0,
                       onChanged: (value) {
                         final newTime =
                             startTime.add(Duration(seconds: value.toInt()));
@@ -375,7 +498,8 @@ class _PlaybackControlPanel extends StatelessWidget {
                       },
                     ),
                   ),
-                  Text(timeFormat.format(endTime), style: const TextStyle(fontSize: 12)),
+                  Text(timeFormat.format(endTime),
+                      style: const TextStyle(fontSize: 12)),
                 ],
               ),
               SingleChildScrollView(
@@ -383,12 +507,17 @@ class _PlaybackControlPanel extends StatelessWidget {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Text('Playback Speed:', style: TextStyle(fontSize: 12)),
+                    const Text('Playback Speed:',
+                        style: TextStyle(fontSize: 12)),
                     const SizedBox(width: 8),
-                    _SpeedChip(speed: 60, current: state.playbackSpeed, label: '1 min/s'),
-                    _SpeedChip(speed: 120, current: state.playbackSpeed, label: '2 min/s'),
-                    _SpeedChip(speed: 300, current: state.playbackSpeed, label: '5 min/s'),
-                    _SpeedChip(speed: 600, current: state.playbackSpeed, label: '10 min/s'),
+                    _SpeedChip(
+                        speed: 60, current: state.playbackSpeed, label: '1 min/s'),
+                    _SpeedChip(
+                        speed: 120, current: state.playbackSpeed, label: '2 min/s'),
+                    _SpeedChip(
+                        speed: 300, current: state.playbackSpeed, label: '5 min/s'),
+                    _SpeedChip(
+                        speed: 600, current: state.playbackSpeed, label: '10 min/s'),
                   ],
                 ),
               ),
@@ -405,7 +534,8 @@ class _SpeedChip extends StatelessWidget {
   final double current;
   final String label;
 
-  const _SpeedChip({required this.speed, required this.current, required this.label});
+  const _SpeedChip(
+      {required this.speed, required this.current, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -418,6 +548,193 @@ class _SpeedChip extends StatelessWidget {
         onSelected: (_) {
           context.read<MapBloc>().add(MapPlaybackSpeedChanged(speed));
         },
+      ),
+    );
+  }
+}
+
+class _RightDelayStatsPanel extends StatelessWidget {
+  final List<AggregatedStopDelay> aggregatedDelays;
+  final bool isVisible;
+  final DelaySortOption sortOption;
+  final Function(DelaySortOption) onSortChanged;
+
+  const _RightDelayStatsPanel({
+    required this.aggregatedDelays,
+    required this.isVisible,
+    required this.sortOption,
+    required this.onSortChanged,
+  });
+
+  String _formatSeconds(num seconds) {
+    final minutes = (seconds / 60).floor();
+    final remainingSeconds = (seconds % 60).round();
+    return '${minutes}m ${remainingSeconds}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Apply sorting based on user selection
+    final sortedList = List<AggregatedStopDelay>.from(aggregatedDelays);
+    switch (sortOption) {
+      case DelaySortOption.count:
+        sortedList.sort((a, b) => b.totalDelayedBuses.compareTo(a.totalDelayedBuses));
+        break;
+      case DelaySortOption.max:
+        sortedList.sort((a, b) => b.maxDelaySeconds.compareTo(a.maxDelaySeconds));
+        break;
+      case DelaySortOption.average:
+        sortedList.sort((a, b) => b.averageDelaySeconds.compareTo(a.averageDelaySeconds));
+        break;
+    }
+
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      top: 16,
+      bottom: 200, // Stay above the playback controls
+      right: isVisible ? 16 : -320, // Slide out of view
+      child: Container(
+        width: 300,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 10,
+              offset: const Offset(-2, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.analytics, size: 18, color: Colors.blueGrey),
+                      SizedBox(width: 8),
+                      Text(
+                        'Top Delayed Stops',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Sort Toggle
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('Sort by: ', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                        const SizedBox(width: 4),
+                        _SortChip(
+                          label: 'Freq',
+                          isSelected: sortOption == DelaySortOption.count,
+                          onSelected: () => onSortChanged(DelaySortOption.count),
+                        ),
+                        _SortChip(
+                          label: 'Max',
+                          isSelected: sortOption == DelaySortOption.max,
+                          onSelected: () => onSortChanged(DelaySortOption.max),
+                        ),
+                        _SortChip(
+                          label: 'Avg',
+                          isSelected: sortOption == DelaySortOption.average,
+                          onSelected: () => onSortChanged(DelaySortOption.average),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: sortedList.length,
+                itemBuilder: (context, index) {
+                  final stop = sortedList[index];
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      radius: 14,
+                      backgroundColor: stop.color.withValues(alpha: 0.2),
+                      child: Text(
+                        '${index + 1}',
+                        style: TextStyle(
+                            color: stop.color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10),
+                      ),
+                    ),
+                    title: Text(
+                      stop.stopName,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 13),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${stop.totalDelayedBuses} delays',
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                        Row(
+                          children: [
+                            Text(
+                              'Max: ${_formatSeconds(stop.maxDelaySeconds)}',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: sortOption == DelaySortOption.max ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              'Avg: ${_formatSeconds(stop.averageDelaySeconds)}',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: sortOption == DelaySortOption.average ? FontWeight.bold : FontWeight.normal),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SortChip extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onSelected;
+
+  const _SortChip({required this.label, required this.isSelected, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: ChoiceChip(
+        label: Text(label, style: const TextStyle(fontSize: 9)),
+        selected: isSelected,
+        onSelected: (_) => onSelected(),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+        visualDensity: VisualDensity.compact,
       ),
     );
   }

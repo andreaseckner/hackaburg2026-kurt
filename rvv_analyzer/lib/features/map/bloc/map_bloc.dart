@@ -16,6 +16,7 @@ class MapBloc extends Bloc<MapEvent, MapState> {
   MapBloc() : super(const MapState()) {
     on<MapLoadStarted>(_onLoadStarted);
     on<MapDaySelected>(_onDaySelected);
+    on<MapVisualizationModeChanged>(_onVisualizationModeChanged);
     on<MapRouteFilterToggled>(_onRouteFilterToggled);
     on<MapAllRoutesToggled>(_onAllRoutesToggled);
     on<MapPlaybackStarted>(_onPlaybackStarted);
@@ -95,6 +96,13 @@ class MapBloc extends Bloc<MapEvent, MapState> {
 
   void _onDaySelected(MapDaySelected event, Emitter<MapState> emit) {
     emit(_processDayChange(state, event.day));
+  }
+
+  void _onVisualizationModeChanged(
+    MapVisualizationModeChanged event,
+    Emitter<MapState> emit,
+  ) {
+    emit(state.copyWith(vizMode: event.mode));
   }
 
   MapState _processDayChange(MapState currentState, DateTime day) {

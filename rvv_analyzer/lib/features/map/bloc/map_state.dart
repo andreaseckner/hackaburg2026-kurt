@@ -1,10 +1,14 @@
+import 'dart:math' as math;
 import 'package:equatable/equatable.dart';
+import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_connection.dart';
 import 'package:rvv_analyzer/gtfs/models/gtfs_stop.dart';
 import 'package:rvv_analyzer/gtfs/models/recorded_stop_event.dart';
 
 enum MapStatus { initial, loading, loaded, error }
+
+enum VisualizationMode { buses, heatmap }
 
 class MapState extends Equatable {
   final MapStatus status;
@@ -22,6 +26,7 @@ class MapState extends Equatable {
   final DateTime? currentPlaybackTime;
   final bool isPlaying;
   final double playbackSpeed;
+  final VisualizationMode vizMode;
 
   const MapState({
     this.status = MapStatus.initial,
@@ -37,6 +42,7 @@ class MapState extends Equatable {
     this.currentPlaybackTime,
     this.isPlaying = false,
     this.playbackSpeed = 60.0, // Default 1 min/s
+    this.vizMode = VisualizationMode.buses,
   });
 
   List<GtfsConnection> get filteredConnections {
@@ -46,7 +52,9 @@ class MapState extends Equatable {
   }
 
   List<ActiveVehicle> get activeVehicles {
-    if (currentPlaybackTime == null) return [];
+    if (currentPlaybackTime == null || vizMode != VisualizationMode.buses) {
+      return [];
+    }
     final active = <ActiveVehicle>[];
 
     for (var tripId in currentDayEvents.keys) {
@@ -56,7 +64,8 @@ class MapState extends Equatable {
 
         // Case 1: At a stop
         if ((currentPlaybackTime!.isAfter(current.arrivalTimeActual) ||
-                currentPlaybackTime!.isAtSameMomentAs(current.arrivalTimeActual)) &&
+                currentPlaybackTime!
+                    .isAtSameMomentAs(current.arrivalTimeActual)) &&
             currentPlaybackTime!.isBefore(current.departureTimeActual)) {
           if (current.isArrivalProductive || current.isDepartureProductive) {
             final stop = _findStop(current);
@@ -78,9 +87,11 @@ class MapState extends Equatable {
         if (i < events.length - 1) {
           final next = events[i + 1];
           if ((currentPlaybackTime!.isAfter(current.departureTimeActual) ||
-                  currentPlaybackTime!.isAtSameMomentAs(current.departureTimeActual)) &&
+                  currentPlaybackTime!
+                      .isAtSameMomentAs(current.departureTimeActual)) &&
               (currentPlaybackTime!.isBefore(next.arrivalTimeActual) ||
-                  currentPlaybackTime!.isAtSameMomentAs(next.arrivalTimeActual))) {
+                  currentPlaybackTime!
+                      .isAtSameMomentAs(next.arrivalTimeActual))) {
             if (current.isDepartureProductive || next.isArrivalProductive) {
               final startStop = _findStop(current);
               final endStop = _findStop(next);
@@ -129,6 +140,96 @@ class MapState extends Equatable {
       }
     }
     return active;
+  }
+
+  List<AggregatedStopDelay> get aggregatedDelays {
+    if (currentPlaybackTime == null || vizMode != VisualizationMode.heatmap) {
+      return [];
+    }
+
+    final stopAggregates = <String, _StopAccumulator>{};
+    final eventsForDay = currentDayEvents.values.expand((e) => e).toList();
+
+    for (var event in eventsForDay) {
+      if ((event.arrivalTimeActual.isBefore(currentPlaybackTime!) ||
+          event.arrivalTimeActual.isAtSameMomentAs(currentPlaybackTime!))) {
+        // Filter by enabled route IDs
+        bool isRouteEnabled = enabledRouteIds.contains(event.lineId) ||
+            allConnections.any((conn) =>
+                conn.lineName == event.lineId &&
+                enabledRouteIds.contains(conn.routeId));
+
+        if (!isRouteEnabled) continue;
+
+        final stop = _findStop(event);
+        if (stop != null) {
+          final delay = event.arrivalDelaySeconds ?? 0;
+          if (delay > 60) {
+            final acc = stopAggregates.putIfAbsent(
+              stop.id,
+              () => _StopAccumulator(stop.id, stop.name, stop.location),
+            );
+            acc.maxDelaySeconds = math.max(acc.maxDelaySeconds, delay);
+            acc.minDelaySeconds = math.min(acc.minDelaySeconds, delay);
+            acc.totalDelaySeconds += delay;
+            acc.totalDelayedBuses++;
+          }
+        }
+      }
+    }
+
+    final result = stopAggregates.values
+        .map((acc) => AggregatedStopDelay(
+              stopId: acc.stopId,
+              stopName: acc.stopName,
+              location: acc.location,
+              minDelaySeconds: acc.minDelaySeconds,
+              maxDelaySeconds: acc.maxDelaySeconds,
+              totalDelaySeconds: acc.totalDelaySeconds,
+              totalDelayedBuses: acc.totalDelayedBuses,
+            ))
+        .toList();
+
+    // Sort by volume of delays descending
+    result.sort((a, b) => b.totalDelayedBuses.compareTo(a.totalDelayedBuses));
+    return result;
+  }
+
+  List<BlinkingBus> get blinkingBuses {
+    if (currentPlaybackTime == null || vizMode != VisualizationMode.heatmap) {
+      return [];
+    }
+
+    final blinking = <BlinkingBus>[];
+    final eventsForDay = currentDayEvents.values.expand((e) => e).toList();
+
+    for (var event in eventsForDay) {
+      final timeDiff = currentPlaybackTime!.difference(event.arrivalTimeActual);
+      if (timeDiff.inSeconds >= 0 && timeDiff.inMinutes < 2) {
+        // Filter by enabled route IDs
+        bool isRouteEnabled = enabledRouteIds.contains(event.lineId) ||
+            allConnections.any((conn) =>
+                conn.lineName == event.lineId &&
+                enabledRouteIds.contains(conn.routeId));
+
+        if (!isRouteEnabled) continue;
+
+        final stop = _findStop(event);
+        if (stop != null) {
+          final delay = event.arrivalDelaySeconds ?? 0;
+          if (delay > 60) {
+            blinking.add(
+              BlinkingBus(
+                location: stop.location,
+                lineId: event.lineId,
+                delaySeconds: delay,
+              ),
+            );
+          }
+        }
+      }
+    }
+    return blinking;
   }
 
   String _normalizeStopName(String name) {
@@ -194,6 +295,7 @@ class MapState extends Equatable {
     DateTime? currentPlaybackTime,
     bool? isPlaying,
     double? playbackSpeed,
+    VisualizationMode? vizMode,
   }) {
     return MapState(
       status: status ?? this.status,
@@ -209,6 +311,7 @@ class MapState extends Equatable {
       currentPlaybackTime: currentPlaybackTime ?? this.currentPlaybackTime,
       isPlaying: isPlaying ?? this.isPlaying,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
+      vizMode: vizMode ?? this.vizMode,
     );
   }
 
@@ -227,6 +330,7 @@ class MapState extends Equatable {
         currentPlaybackTime,
         isPlaying,
         playbackSpeed,
+        vizMode,
       ];
 }
 
@@ -242,4 +346,73 @@ class ActiveVehicle {
     required this.delaySeconds,
     required this.lineId,
   });
+}
+
+class _StopAccumulator {
+  final String stopId;
+  final String stopName;
+  final LatLng location;
+  int minDelaySeconds = 999999;
+  int maxDelaySeconds = 0;
+  int totalDelaySeconds = 0;
+  int totalDelayedBuses = 0;
+
+  _StopAccumulator(this.stopId, this.stopName, this.location);
+}
+
+class AggregatedStopDelay {
+  final String stopId;
+  final String stopName;
+  final LatLng location;
+  final int minDelaySeconds;
+  final int maxDelaySeconds;
+  final int totalDelaySeconds;
+  final int totalDelayedBuses;
+
+  AggregatedStopDelay({
+    required this.stopId,
+    required this.stopName,
+    required this.location,
+    required this.minDelaySeconds,
+    required this.maxDelaySeconds,
+    required this.totalDelaySeconds,
+    required this.totalDelayedBuses,
+  });
+
+  double get averageDelaySeconds =>
+      totalDelayedBuses > 0 ? totalDelaySeconds / totalDelayedBuses : 0;
+
+  Color get color {
+    if (maxDelaySeconds > 300) return Colors.red;
+    if (maxDelaySeconds > 60) return Colors.orange;
+    return Colors.green;
+  }
+
+  double get radius {
+    // Starts at 10, grows with volume of delays
+    return 10.0 + (math.log(totalDelayedBuses + 1) * 8.0);
+  }
+
+  double get opacity {
+    // More consistent trouble = deeper color
+    return (0.3 + (math.min(totalDelayedBuses, 10) / 20.0)).clamp(0.0, 0.8);
+  }
+}
+
+class BlinkingBus {
+  final LatLng location;
+  final String lineId;
+  final int delaySeconds;
+
+  BlinkingBus({
+    required this.location,
+    required this.lineId,
+    required this.delaySeconds,
+  });
+
+  Color get color {
+    if (delaySeconds > 300) return Colors.red;
+    if (delaySeconds > 60) return Colors.orange;
+    return Colors.green;
+  }
 }
