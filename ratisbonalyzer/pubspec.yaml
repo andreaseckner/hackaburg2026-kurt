@@ -17,6 +17,7 @@ dependencies:
   latlong2: ^0.9.1
   csv: ^6.0.0
 
+  vector_graphics: any
 dev_dependencies:
   flutter_test:
     sdk: flutter

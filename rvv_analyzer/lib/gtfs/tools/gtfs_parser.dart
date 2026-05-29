@@ -223,4 +223,3 @@ class _ShapePointRaw {
 
   _ShapePointRaw(this.lat, this.lon, this.sequence);
 }
-

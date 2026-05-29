@@ -72,8 +72,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (!mounted) return;
 
-      final stopMap = {for (var s in stops) s.id: s};
-
       // Build tripId -> stop IDs for filtering
       final tripStopIds = <String, Set<String>>{};
       for (var st in stopTimes) {

@@ -37,11 +37,8 @@ class $AssetsRecGen {
   /// File path: assets/rec/october_2024.csv
   String get october2024 => 'assets/rec/october_2024.csv';
 
-  /// File path: assets/rec/october_2024_test.csv
-  String get october2024Test => 'assets/rec/october_2024_test.csv';
-
   /// List of all assets
-  List<String> get values => [october2024, october2024Test];
+  List<String> get values => [october2024];
 }
 
 class $AssetsWeatherGen {

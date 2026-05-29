@@ -52,4 +52,3 @@ flutter:
     - assets/gtfs/shapes.txt
     - assets/weather/weather_regensburg_all.csv
     - assets/rec/october_2024.csv
-    - assets/rec/october_2024_test.csv
