@@ -267,18 +267,82 @@ class MapState extends Equatable {
 
     if (bestConn == null) return null;
 
-    final segmentStart = startIndex * 2;
-    final segmentEnd = segmentStart + 1;
+    // Find the shape points closest to the start and end stops
+    final startStopLoc =
+        allStops.where((s) => s.id == startStopId).firstOrNull?.location;
+    final endStopLoc =
+        allStops.where((s) => s.id == endStopId).firstOrNull?.location;
+    if (startStopLoc == null || endStopLoc == null) return null;
 
-    if (segmentEnd >= bestConn.points.length) return null;
+    final points = bestConn.points;
+    if (points.length < 2) return null;
 
-    final p1 = bestConn.points[segmentStart];
-    final p2 = bestConn.points[segmentEnd];
+    // Find nearest point index in polyline for start and end stop
+    int nearestStartIdx = _nearestPointIndex(points, startStopLoc);
+    int nearestEndIdx = _nearestPointIndex(points, endStopLoc);
 
-    return LatLng(
-      p1.latitude + (p2.latitude - p1.latitude) * fraction,
-      p1.longitude + (p2.longitude - p1.longitude) * fraction,
-    );
+    if (nearestEndIdx <= nearestStartIdx) {
+      // Fallback to simple linear interpolation
+      return LatLng(
+        startStopLoc.latitude +
+            (endStopLoc.latitude - startStopLoc.latitude) * fraction,
+        startStopLoc.longitude +
+            (endStopLoc.longitude - startStopLoc.longitude) * fraction,
+      );
+    }
+
+    // Get sub-polyline between the two stops
+    final subPoints = points.sublist(nearestStartIdx, nearestEndIdx + 1);
+    if (subPoints.length < 2) return subPoints.first;
+
+    // Compute cumulative distances along sub-polyline
+    final distances = <double>[0.0];
+    for (var i = 1; i < subPoints.length; i++) {
+      final d = _distanceBetween(subPoints[i - 1], subPoints[i]);
+      distances.add(distances.last + d);
+    }
+
+    final totalDist = distances.last;
+    if (totalDist == 0) return subPoints.first;
+
+    final targetDist = totalDist * fraction;
+
+    // Find the segment containing targetDist
+    for (var i = 1; i < distances.length; i++) {
+      if (distances[i] >= targetDist) {
+        final segLen = distances[i] - distances[i - 1];
+        final segFraction = segLen > 0
+            ? (targetDist - distances[i - 1]) / segLen
+            : 0.0;
+        final p1 = subPoints[i - 1];
+        final p2 = subPoints[i];
+        return LatLng(
+          p1.latitude + (p2.latitude - p1.latitude) * segFraction,
+          p1.longitude + (p2.longitude - p1.longitude) * segFraction,
+        );
+      }
+    }
+
+    return subPoints.last;
+  }
+
+  static int _nearestPointIndex(List<LatLng> points, LatLng target) {
+    int bestIdx = 0;
+    double bestDist = double.infinity;
+    for (var i = 0; i < points.length; i++) {
+      final d = _distanceBetween(points[i], target);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
+  static double _distanceBetween(LatLng a, LatLng b) {
+    final dlat = a.latitude - b.latitude;
+    final dlon = a.longitude - b.longitude;
+    return dlat * dlat + dlon * dlon;
   }
 
   MapState copyWith({

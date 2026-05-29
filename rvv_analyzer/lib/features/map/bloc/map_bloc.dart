@@ -43,14 +43,17 @@ class MapBloc extends Bloc<MapEvent, MapState> {
       final csvStopTimes = await rootBundle.loadString(Assets.gtfs.stopTimes);
       final csvTrips = await rootBundle.loadString(Assets.gtfs.trips);
       final csvRoutes = await rootBundle.loadString(Assets.gtfs.routes);
+      final csvShapes = await rootBundle.loadString(Assets.gtfs.shapes);
       final csvRecording = await rootBundle.loadString(Assets.rec.october2024);
 
       final stops = GtfsParser.parseStops(csvStops);
+      final shapes = GtfsParser.parseShapes(csvShapes);
       final connections = GtfsParser.reconstructConnections(
         stopTimesCsv: csvStopTimes,
         tripsCsv: csvTrips,
         routesCsv: csvRoutes,
         stops: stops,
+        shapes: shapes,
       );
 
       final recordedEvents = RecordedDataParser.parseRecording(csvRecording);

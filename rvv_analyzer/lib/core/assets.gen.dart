@@ -15,6 +15,9 @@ class $AssetsGtfsGen {
   /// File path: assets/gtfs/routes.txt
   String get routes => 'assets/gtfs/routes.txt';
 
+  /// File path: assets/gtfs/shapes.txt
+  String get shapes => 'assets/gtfs/shapes.txt';
+
   /// File path: assets/gtfs/stop_times.txt
   String get stopTimes => 'assets/gtfs/stop_times.txt';
 
@@ -25,7 +28,7 @@ class $AssetsGtfsGen {
   String get trips => 'assets/gtfs/trips.txt';
 
   /// List of all assets
-  List<String> get values => [routes, stopTimes, stops, trips];
+  List<String> get values => [routes, shapes, stopTimes, stops, trips];
 }
 
 class Assets {

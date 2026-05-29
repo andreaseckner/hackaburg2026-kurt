@@ -49,4 +49,5 @@ flutter:
     - assets/gtfs/stop_times.txt
     - assets/gtfs/trips.txt
     - assets/gtfs/routes.txt
+    - assets/gtfs/shapes.txt
     - assets/rec/october_2024.csv
