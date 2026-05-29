@@ -1,20 +1,22 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ratisbonalyzer/src/core/assets.gen.dart';
+import 'package:ratisbonalyzer/src/core/audio_utils.dart';
 import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
 import 'package:ratisbonalyzer/src/core/theme/dimens.dart';
 import 'package:ratisbonalyzer/src/features/chat/bloc/chat_bloc.dart';
 import 'package:ratisbonalyzer/src/features/chat/widgets/chat_panel.dart';
-import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
-import 'dart:async';
-import 'dart:math' as math;
+import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 
 class _RouteData {
   final String routeId;
@@ -57,6 +59,7 @@ class _BusPlaybackState {
 class _PathInterpolationResult {
   final LatLng position;
   final double bearing;
+
   _PathInterpolationResult(this.position, this.bearing);
 }
 
@@ -94,6 +97,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _controlPanelExpanded = true;
   bool _chatPanelOpen = false;
   bool _chatButtonHovered = false;
+  bool _tofuHovered = false;
+  Timer? _tofuTimer;
   Set<String> _selectedRouteIds = {};
 
   Map<String, List<RvvRecord>> _recFiles = {};
@@ -120,6 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _playbackTimer?.cancel();
+    _tofuTimer?.cancel();
     _chatBloc.close();
     super.dispose();
   }
@@ -785,675 +791,743 @@ class _HomeScreenState extends State<HomeScreen> {
         ? screenSize.height - 160
         : 540.0;
 
-    return Scaffold(
-      appBar: AppBar(
-        centerTitle: false,
-        titleSpacing: 0,
-        leadingWidth: Dimens.appBarLeadingWidth,
-        leading: const Padding(
-          padding: EdgeInsets.symmetric(
-            vertical: Dimens.paddingSmall,
-            horizontal: Dimens.paddingMedium,
-          ),
-          child: RvvLogo(height: Dimens.rvvLogoHeight),
-        ),
-        title: Text(
-          l10n.appTitle,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: theme.colorScheme.primary,
-          ),
-        ),
-      ),
-      body: Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _initialCenter,
-              initialZoom: _initialZoom,
-              onPositionChanged: (position, hasGesture) {
-                if (position.zoom != _currentZoom) {
-                  setState(() {
-                    _currentZoom = position.zoom;
-                  });
-                }
-              },
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: _osmUrlTemplate,
-                userAgentPackageName: _userAgentPackage,
+    return Stack(
+      children: [
+        Scaffold(
+          appBar: AppBar(
+            centerTitle: false,
+            titleSpacing: 0,
+            leadingWidth: Dimens.appBarLeadingWidth,
+            leading: const Padding(
+              padding: EdgeInsets.symmetric(
+                vertical: Dimens.paddingSmall,
+                horizontal: Dimens.paddingMedium,
               ),
-              if (_showBusLines) PolylineLayer(polylines: _filteredPolylines),
-              if (_showBusLines &&
-                  _showBusLineLabels &&
-                  _currentZoom >= _initialZoom)
-                MarkerLayer(markers: _filteredLabels),
-              if (_showBusStops)
-                MarkerLayer(
-                  markers: _filteredStops.map((stop) {
-                    return Marker(
-                      point: stop.position,
-                      width: _stopMarkerSize,
-                      height: _stopMarkerSize,
-                      alignment: Alignment.center,
-                      child: Tooltip(
-                        message: stop.name,
-                        child: Assets.img.busStop.svg(),
-                      ),
-                    );
-                  }).toList(),
+              child: RvvLogo(height: Dimens.rvvLogoHeight),
+            ),
+            title: Text(
+              l10n.appTitle,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ),
+          body: Stack(
+            children: [
+              FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: _initialCenter,
+                  initialZoom: _initialZoom,
+                  onPositionChanged: (position, hasGesture) {
+                    if (position.zoom != _currentZoom) {
+                      setState(() {
+                        _currentZoom = position.zoom;
+                      });
+                    }
+                  },
                 ),
-              // Live bus markers layer
-              MarkerLayer(
-                markers: _activeBuses.map((bus) {
-                  final delayColor = _getDelayColor(bus.delaySeconds ?? 0);
-                  return Marker(
-                    point: bus.position,
-                    width: 32.0,
-                    height: 32.0,
-                    alignment: Alignment.center,
-                    child: Tooltip(
-                      message:
-                          'Line ${bus.line}\nUmlauf: ${bus.rotation}\nDelay: ${bus.delaySeconds != null ? "${(bus.delaySeconds! / 60).round()}m" : "N/A"}',
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: bus.color,
-                          border: Border.all(color: Colors.white, width: 2.0),
-                          boxShadow: [
-                            BoxShadow(
-                              color: delayColor.withValues(alpha: 0.95),
-                              blurRadius: 8.0,
-                              spreadRadius: 3.5,
+                children: [
+                  TileLayer(
+                    urlTemplate: _osmUrlTemplate,
+                    userAgentPackageName: _userAgentPackage,
+                  ),
+                  if (_showBusLines)
+                    PolylineLayer(polylines: _filteredPolylines),
+                  if (_showBusLines &&
+                      _showBusLineLabels &&
+                      _currentZoom >= _initialZoom)
+                    MarkerLayer(markers: _filteredLabels),
+                  if (_showBusStops)
+                    MarkerLayer(
+                      markers: _filteredStops.map((stop) {
+                        return Marker(
+                          point: stop.position,
+                          width: _stopMarkerSize,
+                          height: _stopMarkerSize,
+                          alignment: Alignment.center,
+                          child: Tooltip(
+                            message: stop.name,
+                            child: Assets.img.busStop.svg(),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  // Live bus markers layer
+                  MarkerLayer(
+                    markers: _activeBuses.map((bus) {
+                      final delayColor = _getDelayColor(bus.delaySeconds ?? 0);
+                      return Marker(
+                        point: bus.position,
+                        width: 32.0,
+                        height: 32.0,
+                        alignment: Alignment.center,
+                        child: Tooltip(
+                          message:
+                              'Line ${bus.line}\nUmlauf: ${bus.rotation}\nDelay: ${bus.delaySeconds != null ? "${(bus.delaySeconds! / 60).round()}m" : "N/A"}',
+                          child: Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: bus.color,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2.0,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: delayColor.withValues(alpha: 0.95),
+                                  blurRadius: 8.0,
+                                  spreadRadius: 3.5,
+                                ),
+                                BoxShadow(
+                                  color: delayColor.withValues(alpha: 0.85),
+                                  blurRadius: 25.0,
+                                  spreadRadius: 10.0,
+                                ),
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.15),
+                                  blurRadius: 2.0,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ],
                             ),
-                            BoxShadow(
-                              color: delayColor.withValues(alpha: 0.85),
-                              blurRadius: 25.0,
-                              spreadRadius: 10.0,
-                            ),
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.15),
-                              blurRadius: 2.0,
-                              offset: const Offset(0, 1),
-                            ),
-                          ],
-                        ),
-                        child: Center(
-                          child: Text(
-                            bus.line,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 10,
+                            child: Center(
+                              child: Text(
+                                bus.line,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 10,
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                }).toList(),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ),
-            ],
-          ),
-          Positioned(
-            top: 16,
-            left: 16,
-            child: _controlPanelExpanded
-                ? Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxHeight: 400,
-                        maxWidth: 220,
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+              Positioned(
+                top: 16,
+                left: 16,
+                child: _controlPanelExpanded
+                    ? Card(
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 400,
+                            maxWidth: 220,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: SingleChildScrollView(
+                              child: Column(
                                 mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  InkWell(
-                                    onTap: () => setState(
-                                      () => _controlPanelExpanded = false,
-                                    ),
-                                    child: const Icon(
-                                      Icons.chevron_left,
-                                      size: 20,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    l10n.controlPanelTitle,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.route, size: 18),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Bus Lines',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                  const Spacer(),
-                                  SizedBox(
-                                    height: 28,
-                                    width: 44,
-                                    child: FittedBox(
-                                      child: Switch(
-                                        value: _showBusLines,
-                                        onChanged: (v) =>
-                                            setState(() => _showBusLines = v),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.directions_bus, size: 18),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Bus Stops',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                  const Spacer(),
-                                  SizedBox(
-                                    height: 28,
-                                    width: 44,
-                                    child: FittedBox(
-                                      child: Switch(
-                                        value: _showBusStops,
-                                        onChanged: (v) =>
-                                            setState(() => _showBusStops = v),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.label_outline, size: 18),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Line Labels',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                  const Spacer(),
-                                  SizedBox(
-                                    height: 28,
-                                    width: 44,
-                                    child: FittedBox(
-                                      child: Switch(
-                                        value: _showBusLineLabels,
-                                        onChanged: (v) => setState(
-                                          () => _showBusLineLabels = v,
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      InkWell(
+                                        onTap: () => setState(
+                                          () => _controlPanelExpanded = false,
+                                        ),
+                                        child: const Icon(
+                                          Icons.chevron_left,
+                                          size: 20,
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.linear_scale, size: 18),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    'Interpolate',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                  const Spacer(),
-                                  SizedBox(
-                                    height: 28,
-                                    width: 44,
-                                    child: FittedBox(
-                                      child: Switch(
-                                        value: _interpolateBuses,
-                                        onChanged: (v) {
-                                          setState(() {
-                                            _interpolateBuses = v;
-                                            _updateActiveBuses();
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(height: 16),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Text(
-                                    'Filter',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  InkWell(
-                                    onTap: _selectAllRoutes,
-                                    child: const Text(
-                                      'All',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.blue,
-                                        decoration: TextDecoration.underline,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  InkWell(
-                                    onTap: _selectNoRoutes,
-                                    child: const Text(
-                                      'None',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.blue,
-                                        decoration: TextDecoration.underline,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 4,
-                                runSpacing: 4,
-                                children: _allRoutes.map((route) {
-                                  final selected = _selectedRouteIds.contains(
-                                    route.routeId,
-                                  );
-                                  return GestureDetector(
-                                    onTap: () => _toggleRoute(route.routeId),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: selected
-                                            ? route.color
-                                            : Colors.grey.shade200,
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(
-                                          color: route.color,
-                                          width: 1.5,
-                                        ),
-                                      ),
-                                      child: Text(
-                                        route.shortName,
-                                        style: TextStyle(
-                                          fontSize: 10,
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        l10n.controlPanelTitle,
+                                        style: const TextStyle(
+                                          fontSize: 14,
                                           fontWeight: FontWeight.bold,
-                                          color: selected
-                                              ? Colors.white
-                                              : route.color,
                                         ),
                                       ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.route, size: 18),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Bus Lines',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _showBusLines,
+                                            onChanged: (v) => setState(
+                                              () => _showBusLines = v,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.directions_bus,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Bus Stops',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _showBusStops,
+                                            onChanged: (v) => setState(
+                                              () => _showBusStops = v,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.label_outline, size: 18),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Line Labels',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _showBusLineLabels,
+                                            onChanged: (v) => setState(
+                                              () => _showBusLineLabels = v,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.linear_scale, size: 18),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Interpolate',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _interpolateBuses,
+                                            onChanged: (v) {
+                                              setState(() {
+                                                _interpolateBuses = v;
+                                                _updateActiveBuses();
+                                              });
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(height: 16),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text(
+                                        'Filter',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: _selectAllRoutes,
+                                        child: const Text(
+                                          'All',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.blue,
+                                            decoration:
+                                                TextDecoration.underline,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: _selectNoRoutes,
+                                        child: const Text(
+                                          'None',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.blue,
+                                            decoration:
+                                                TextDecoration.underline,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 4,
+                                    runSpacing: 4,
+                                    children: _allRoutes.map((route) {
+                                      final selected = _selectedRouteIds
+                                          .contains(route.routeId);
+                                      return GestureDetector(
+                                        onTap: () =>
+                                            _toggleRoute(route.routeId),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 3,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: selected
+                                                ? route.color
+                                                : Colors.grey.shade200,
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                            border: Border.all(
+                                              color: route.color,
+                                              width: 1.5,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            route.shortName,
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: selected
+                                                  ? Colors.white
+                                                  : route.color,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    : Card(
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: InkWell(
+                          onTap: () =>
+                              setState(() => _controlPanelExpanded = true),
+                          borderRadius: BorderRadius.circular(12),
+                          child: const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: Icon(Icons.layers, size: 22),
+                          ),
+                        ),
+                      ),
+              ),
+              if (_chatPanelOpen)
+                Positioned(
+                  right: 16,
+                  bottom: 148,
+                  width: chatPanelWidth,
+                  child: BlocProvider.value(
+                    value: _chatBloc,
+                    child: ChatPanel(
+                      height: chatPanelHeight,
+                      onClose: _closeChatPanel,
+                    ),
+                  ),
+                ),
+              if (!_isLoading && _recFiles.isNotEmpty)
+                Positioned(
+                  left: 16,
+                  right: 140,
+                  bottom: 16,
+                  child: Card(
+                    elevation: 6,
+                    shadowColor: Colors.black.withValues(alpha: 0.15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.tune_outlined,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _currentPlaybackTime != null
+                                    ? 'Playback: ${DateFormat('HH:mm:ss').format(_currentPlaybackTime!)}'
+                                    : 'Playback Controls',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              ),
+                              const Spacer(),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.08,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: theme.colorScheme.primary.withValues(
+                                      alpha: 0.2,
                                     ),
-                                  );
-                                }).toList(),
+                                  ),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String>(
+                                    value: _selectedRecFile,
+                                    icon: const Icon(Icons.arrow_drop_down),
+                                    isDense: true,
+                                    focusColor: Colors.transparent,
+                                    items: _recFiles.keys.map((filename) {
+                                      return DropdownMenuItem<String>(
+                                        value: filename,
+                                        child: Text(
+                                          filename,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: _onRecFileChanged,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.08,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: theme.colorScheme.primary.withValues(
+                                      alpha: 0.2,
+                                    ),
+                                  ),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<DateTime>(
+                                    value: _selectedDay,
+                                    icon: const Icon(
+                                      Icons.calendar_today,
+                                      size: 14,
+                                    ),
+                                    isDense: true,
+                                    focusColor: Colors.transparent,
+                                    items: _getDaysForSelectedDataset().map((
+                                      day,
+                                    ) {
+                                      return DropdownMenuItem<DateTime>(
+                                        value: day,
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(
+                                            right: 8.0,
+                                          ),
+                                          child: Text(
+                                            DateFormat(
+                                              'dd.MM.yyyy',
+                                            ).format(day),
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: _onDayChanged,
+                                  ),
+                                ),
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                    ),
-                  )
-                : Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: InkWell(
-                      onTap: () => setState(() => _controlPanelExpanded = true),
-                      borderRadius: BorderRadius.circular(12),
-                      child: const Padding(
-                        padding: EdgeInsets.all(10),
-                        child: Icon(Icons.layers, size: 22),
-                      ),
-                    ),
-                  ),
-          ),
-          if (_chatPanelOpen)
-            Positioned(
-              right: 16,
-              bottom: 148,
-              width: chatPanelWidth,
-              child: BlocProvider.value(
-                value: _chatBloc,
-                child: ChatPanel(
-                  height: chatPanelHeight,
-                  onClose: _closeChatPanel,
-                ),
-              ),
-            ),
-          if (!_isLoading && _recFiles.isNotEmpty)
-            Positioned(
-              left: 16,
-              right: 140,
-              bottom: 16,
-              child: Card(
-                elevation: 6,
-                shadowColor: Colors.black.withValues(alpha: 0.15),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 16,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.tune_outlined,
-                            color: theme.colorScheme.primary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _currentPlaybackTime != null
-                                ? 'Playback: ${DateFormat('HH:mm:ss').format(_currentPlaybackTime!)}'
-                                : 'Playback Controls',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(
-                                alpha: 0.08,
-                              ),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: theme.colorScheme.primary.withValues(
-                                  alpha: 0.2,
+                          const SizedBox(height: 12),
+                          // Play/Pause, Progress Bar, and Speed Selection Row
+                          Row(
+                            children: [
+                              IconButton(
+                                icon: Icon(
+                                  _isPlaying
+                                      ? Icons.pause_circle_filled
+                                      : Icons.play_circle_filled,
                                 ),
-                              ),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String>(
-                                value: _selectedRecFile,
-                                icon: const Icon(Icons.arrow_drop_down),
-                                isDense: true,
-                                focusColor: Colors.transparent,
-                                items: _recFiles.keys.map((filename) {
-                                  return DropdownMenuItem<String>(
-                                    value: filename,
-                                    child: Text(
-                                      filename,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                                onChanged: _onRecFileChanged,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(
-                                alpha: 0.08,
-                              ),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: theme.colorScheme.primary.withValues(
-                                  alpha: 0.2,
-                                ),
-                              ),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<DateTime>(
-                                value: _selectedDay,
-                                icon: const Icon(
-                                  Icons.calendar_today,
-                                  size: 14,
-                                ),
-                                isDense: true,
-                                focusColor: Colors.transparent,
-                                items: _getDaysForSelectedDataset().map((day) {
-                                  return DropdownMenuItem<DateTime>(
-                                    value: day,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                        right: 8.0,
-                                      ),
-                                      child: Text(
-                                        DateFormat('dd.MM.yyyy').format(day),
-                                        style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                                onChanged: _onDayChanged,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      // Play/Pause, Progress Bar, and Speed Selection Row
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              _isPlaying
-                                  ? Icons.pause_circle_filled
-                                  : Icons.play_circle_filled,
-                            ),
-                            iconSize: 36,
-                            color: theme.colorScheme.primary,
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                            onPressed: () {
-                              if (_isPlaying) {
-                                _pausePlayback();
-                              } else {
-                                _startPlayback();
-                              }
-                            },
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            _firstTimestamp != null
-                                ? DateFormat(
-                                    'HH:mm:ss',
-                                  ).format(_firstTimestamp!)
-                                : '--:--:--',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'monospace',
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          Expanded(
-                            child: SliderTheme(
-                              data: SliderTheme.of(context).copyWith(
-                                trackHeight: 4,
-                                activeTrackColor: theme.colorScheme.primary,
-                                inactiveTrackColor: theme.colorScheme.primary
-                                    .withValues(alpha: 0.12),
-                                thumbColor: theme.colorScheme.primary,
-                                thumbShape: const RoundSliderThumbShape(
-                                  enabledThumbRadius: 6,
-                                ),
-                                overlayShape: const RoundSliderOverlayShape(
-                                  overlayRadius: 14,
-                                ),
-                                disabledActiveTrackColor: theme
-                                    .colorScheme
-                                    .primary
-                                    .withValues(alpha: 0.4),
-                                disabledInactiveTrackColor: theme
-                                    .colorScheme
-                                    .primary
-                                    .withValues(alpha: 0.12),
-                                disabledThumbColor: theme.colorScheme.primary
-                                    .withValues(alpha: 0.5),
-                              ),
-                              child: Slider(
-                                value: _playbackProgress,
-                                onChanged: _onSliderChanged,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            _lastTimestamp != null
-                                ? DateFormat('HH:mm:ss').format(_lastTimestamp!)
-                                : '--:--:--',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontFamily: 'monospace',
-                              fontWeight: FontWeight.bold,
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          // Speed Selection
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(
-                                alpha: 0.08,
-                              ),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: theme.colorScheme.primary.withValues(
-                                  alpha: 0.2,
-                                ),
-                              ),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<int>(
-                                value: _playbackSpeed,
-                                icon: const Icon(Icons.speed, size: 14),
-                                isDense: true,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                focusColor: Colors.transparent,
-                                items: List.generate(30, (i) => i + 1).map((
-                                  speed,
-                                ) {
-                                  return DropdownMenuItem<int>(
-                                    value: speed,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                        right: 4.0,
-                                      ),
-                                      child: Text('${speed}x'),
-                                    ),
-                                  );
-                                }).toList(),
-                                onChanged: (val) {
-                                  if (val != null) {
-                                    setState(() {
-                                      _playbackSpeed = val;
-                                    });
+                                iconSize: 36,
+                                color: theme.colorScheme.primary,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () {
+                                  if (_isPlaying) {
+                                    _pausePlayback();
+                                  } else {
+                                    _startPlayback();
                                   }
                                 },
                               ),
-                            ),
+                              const SizedBox(width: 12),
+                              Text(
+                                _firstTimestamp != null
+                                    ? DateFormat(
+                                        'HH:mm:ss',
+                                      ).format(_firstTimestamp!)
+                                    : '--:--:--',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              Expanded(
+                                child: SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    trackHeight: 4,
+                                    activeTrackColor: theme.colorScheme.primary,
+                                    inactiveTrackColor: theme
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.12),
+                                    thumbColor: theme.colorScheme.primary,
+                                    thumbShape: const RoundSliderThumbShape(
+                                      enabledThumbRadius: 6,
+                                    ),
+                                    overlayShape: const RoundSliderOverlayShape(
+                                      overlayRadius: 14,
+                                    ),
+                                    disabledActiveTrackColor: theme
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.4),
+                                    disabledInactiveTrackColor: theme
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.12),
+                                    disabledThumbColor: theme
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.5),
+                                  ),
+                                  child: Slider(
+                                    value: _playbackProgress,
+                                    onChanged: _onSliderChanged,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                _lastTimestamp != null
+                                    ? DateFormat(
+                                        'HH:mm:ss',
+                                      ).format(_lastTimestamp!)
+                                    : '--:--:--',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              // Speed Selection
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.08,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: theme.colorScheme.primary.withValues(
+                                      alpha: 0.2,
+                                    ),
+                                  ),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<int>(
+                                    value: _playbackSpeed,
+                                    icon: const Icon(Icons.speed, size: 14),
+                                    isDense: true,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: theme.colorScheme.primary,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    focusColor: Colors.transparent,
+                                    items: List.generate(30, (i) => i + 1).map((
+                                      speed,
+                                    ) {
+                                      return DropdownMenuItem<int>(
+                                        value: speed,
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(
+                                            right: 4.0,
+                                          ),
+                                          child: Text('${speed}x'),
+                                        ),
+                                      );
+                                    }).toList(),
+                                    onChanged: (val) {
+                                      if (val != null) {
+                                        setState(() {
+                                          _playbackSpeed = val;
+                                        });
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 140),
-            curve: Curves.easeOut,
-            right: 20,
-            bottom: 70 - (_chatButtonHovered ? 48 : 42),
-            child: MouseRegion(
-              onEnter: (_) => setState(() => _chatButtonHovered = true),
-              onExit: (_) => setState(() => _chatButtonHovered = false),
-              child: Tooltip(
-                message: 'Ask me anything!',
-                preferBelow: false,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 140),
-                  curve: Curves.easeOut,
-                  width: _chatButtonHovered ? 96 : 84,
-                  height: _chatButtonHovered ? 96 : 84,
-                  child: Material(
-                    color: theme.colorScheme.surface,
-                    shape: CircleBorder(
-                      side: BorderSide(
-                        color: theme.colorScheme.primary,
-                        width: 2,
-                      ),
-                    ),
-                    elevation: _chatButtonHovered ? 12 : 8,
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: _toggleChatPanel,
-                      child: Image.asset(
-                        'assets/img/kurt.jpg',
-                        fit: BoxFit.cover,
-                      ),
                     ),
                   ),
                 ),
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOut,
+                right: 20,
+                bottom: 70 - (_chatButtonHovered ? 48 : 42),
+                child: MouseRegion(
+                  onEnter: (_) => setState(() => _chatButtonHovered = true),
+                  onExit: (_) => setState(() => _chatButtonHovered = false),
+                  child: Tooltip(
+                    message: 'Ask me anything!',
+                    preferBelow: false,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 140),
+                      curve: Curves.easeOut,
+                      width: _chatButtonHovered ? 96 : 84,
+                      height: _chatButtonHovered ? 96 : 84,
+                      child: Material(
+                        color: theme.colorScheme.surface,
+                        shape: CircleBorder(
+                          side: BorderSide(
+                            color: theme.colorScheme.primary,
+                            width: 2,
+                          ),
+                        ),
+                        elevation: _chatButtonHovered ? 12 : 8,
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _toggleChatPanel,
+                          child: Image.asset(
+                            'assets/img/kurt.jpg',
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
+              if (_isLoading) const Center(child: CircularProgressIndicator()),
+            ],
+          ),
+        ),
+        // Mr. Tofu peeking graphic
+        Positioned(
+          right: -40,
+          top: 8,
+          child: IgnorePointer(
+            child: AnimatedRotation(
+              turns: _tofuHovered ? -70 / 360 : 0,
+              alignment: Alignment.bottomLeft,
+              duration: const Duration(seconds: 2),
+              curve: Curves.easeOut,
+              child: Assets.img.tofu.image(width: 40, height: 40),
             ),
           ),
-          if (_isLoading) const Center(child: CircularProgressIndicator()),
-        ],
-      ),
+        ),
+        // Invisible hover trigger region over the toolbar right corner
+        Positioned(
+          top: 0,
+          right: 0,
+          width: 50,
+          height: 56,
+          child: MouseRegion(
+            onEnter: (_) {
+              if (!_tofuHovered) {
+                setState(() {
+                  _tofuHovered = true;
+                });
+                playBoingSound();
+                _tofuTimer?.cancel();
+                _tofuTimer = Timer(const Duration(seconds: 3), () {
+                  if (mounted) {
+                    setState(() {
+                      _tofuHovered = false;
+                    });
+                  }
+                });
+              }
+            },
+            child: Container(color: Colors.transparent),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -42,8 +42,46 @@ class $AssetsImgGen {
   /// File path: assets/img/bus_stop.svg
   SvgGenImage get busStop => const SvgGenImage('assets/img/bus_stop.svg');
 
+  /// File path: assets/img/kurt.jpg
+  AssetGenImage get kurt => const AssetGenImage('assets/img/kurt.jpg');
+
+  /// File path: assets/img/tofu.png
+  AssetGenImage get tofu => const AssetGenImage('assets/img/tofu.png');
+
   /// List of all assets
-  List<SvgGenImage> get values => [busStop];
+  List<dynamic> get values => [busStop, kurt, tofu];
+}
+
+class $AssetsRecGen {
+  const $AssetsRecGen();
+
+  /// File path: assets/rec/.gitkeep
+  String get aGitkeep => 'assets/rec/.gitkeep';
+
+  /// File path: assets/rec/06.10.2024_19.10.2024_ITCS.csv
+  String get a0610202419102024ITCS =>
+      'assets/rec/06.10.2024_19.10.2024_ITCS.csv';
+
+  /// File path: assets/rec/08.10.2023_21.10.2023_ITCS.csv
+  String get a0810202321102023ITCS =>
+      'assets/rec/08.10.2023_21.10.2023_ITCS.csv';
+
+  /// List of all assets
+  List<String> get values => [
+    aGitkeep,
+    a0610202419102024ITCS,
+    a0810202321102023ITCS,
+  ];
+}
+
+class $AssetsSoundsGen {
+  const $AssetsSoundsGen();
+
+  /// File path: assets/sounds/boing.mp3
+  String get boing => 'assets/sounds/boing.mp3';
+
+  /// List of all assets
+  List<String> get values => [boing];
 }
 
 class Assets {
@@ -51,6 +89,96 @@ class Assets {
 
   static const $AssetsGtfsGen gtfs = $AssetsGtfsGen();
   static const $AssetsImgGen img = $AssetsImgGen();
+  static const $AssetsRecGen rec = $AssetsRecGen();
+  static const $AssetsSoundsGen sounds = $AssetsSoundsGen();
+}
+
+class AssetGenImage {
+  const AssetGenImage(
+    this._assetName, {
+    this.size,
+    this.flavors = const {},
+    this.animation,
+  });
+
+  final String _assetName;
+
+  final Size? size;
+  final Set<String> flavors;
+  final AssetGenImageAnimation? animation;
+
+  Image image({
+    Key? key,
+    AssetBundle? bundle,
+    ImageFrameBuilder? frameBuilder,
+    ImageErrorWidgetBuilder? errorBuilder,
+    String? semanticLabel,
+    bool excludeFromSemantics = false,
+    double? scale,
+    double? width,
+    double? height,
+    Color? color,
+    Animation<double>? opacity,
+    BlendMode? colorBlendMode,
+    BoxFit? fit,
+    AlignmentGeometry alignment = Alignment.center,
+    ImageRepeat repeat = ImageRepeat.noRepeat,
+    Rect? centerSlice,
+    bool matchTextDirection = false,
+    bool gaplessPlayback = true,
+    bool isAntiAlias = false,
+    String? package,
+    FilterQuality filterQuality = FilterQuality.medium,
+    int? cacheWidth,
+    int? cacheHeight,
+  }) {
+    return Image.asset(
+      _assetName,
+      key: key,
+      bundle: bundle,
+      frameBuilder: frameBuilder,
+      errorBuilder: errorBuilder,
+      semanticLabel: semanticLabel,
+      excludeFromSemantics: excludeFromSemantics,
+      scale: scale,
+      width: width,
+      height: height,
+      color: color,
+      opacity: opacity,
+      colorBlendMode: colorBlendMode,
+      fit: fit,
+      alignment: alignment,
+      repeat: repeat,
+      centerSlice: centerSlice,
+      matchTextDirection: matchTextDirection,
+      gaplessPlayback: gaplessPlayback,
+      isAntiAlias: isAntiAlias,
+      package: package,
+      filterQuality: filterQuality,
+      cacheWidth: cacheWidth,
+      cacheHeight: cacheHeight,
+    );
+  }
+
+  ImageProvider provider({AssetBundle? bundle, String? package}) {
+    return AssetImage(_assetName, bundle: bundle, package: package);
+  }
+
+  String get path => _assetName;
+
+  String get keyName => _assetName;
+}
+
+class AssetGenImageAnimation {
+  const AssetGenImageAnimation({
+    required this.isAnimation,
+    required this.duration,
+    required this.frames,
+  });
+
+  final bool isAnimation;
+  final Duration duration;
+  final int frames;
 }
 
 class SvgGenImage {
