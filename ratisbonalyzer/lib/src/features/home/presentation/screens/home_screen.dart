@@ -49,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final GtfsService _gtfsService = GtfsService();
   final MapController _mapController = MapController();
+  final ChatBloc _chatBloc = ChatBloc();
   double _currentZoom = _initialZoom;
 
   List<Stop> _stops = [];
@@ -57,12 +58,20 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showBusLines = true;
   bool _showBusStops = true;
   bool _controlPanelExpanded = true;
+  bool _chatPanelOpen = false;
+  bool _chatButtonHovered = false;
   Set<String> _selectedRouteIds = {};
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _chatBloc.close();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -231,23 +240,25 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _showChatPanel(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (modalContext) {
-        return BlocProvider(
-          create: (_) => ChatBloc(),
-          child: const ChatPanel(),
-        );
-      },
-    );
+  void _toggleChatPanel() {
+    setState(() => _chatPanelOpen = !_chatPanelOpen);
+  }
+
+  void _closeChatPanel() {
+    setState(() => _chatPanelOpen = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
+    final screenSize = MediaQuery.sizeOf(context);
+    final chatPanelWidth = screenSize.width < 460
+        ? screenSize.width - 32
+        : 420.0;
+    final chatPanelHeight = screenSize.height < 680
+        ? screenSize.height - 160
+        : 540.0;
 
     return Scaffold(
       appBar: AppBar(
@@ -268,12 +279,6 @@ class _HomeScreenState extends State<HomeScreen> {
             color: theme.colorScheme.primary,
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: () => _showChatPanel(context),
-          ),
-        ],
       ),
       body: Stack(
         children: [
@@ -502,6 +507,56 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
+          ),
+          if (_chatPanelOpen)
+            Positioned(
+              right: 16,
+              bottom: 88,
+              width: chatPanelWidth,
+              child: BlocProvider.value(
+                value: _chatBloc,
+                child: ChatPanel(
+                  height: chatPanelHeight,
+                  onClose: _closeChatPanel,
+                ),
+              ),
+            ),
+          Positioned(
+            right: 20,
+            bottom: 20,
+            child: MouseRegion(
+              onEnter: (_) => setState(() => _chatButtonHovered = true),
+              onExit: (_) => setState(() => _chatButtonHovered = false),
+              child: Tooltip(
+                message: 'Ask me anything!',
+                preferBelow: false,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  curve: Curves.easeOut,
+                  width: _chatButtonHovered ? 76 : 64,
+                  height: _chatButtonHovered ? 76 : 64,
+                  child: Material(
+                    color: theme.colorScheme.surface,
+                    shape: CircleBorder(
+                      side: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 2,
+                      ),
+                    ),
+                    elevation: _chatButtonHovered ? 12 : 8,
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _toggleChatPanel,
+                      child: Image.asset(
+                        'assets/img/kurt.jpg',
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
           if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],

@@ -48,7 +48,7 @@ def test_weekday_morning_intervention_routes_to_corridor_answer(db_path):
 
     assert response["intent"] == "weekday_morning_intervention"
     assert response["confidence"] == 1.0
-    assert response["metric_source"] == "corridor_pain_points_filtered weekday_only=true hour_from=6 hour_to=10"
+    assert response["metric_source"] == "corridor_pain_points_filtered weekday_only=true hour_from=6 hour_to=10 min_service_days=30"
     assert response["map_state"]["layer_type"] == "corridor"
     assert response["data"]
 

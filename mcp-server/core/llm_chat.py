@@ -44,7 +44,6 @@ _ALLOWED_MCP_TOOLS = {
     "get_corridor_reliability_pain_points",
     "get_delay_growth_segments",
     "explain_reliability_pain_points_for_day",
-    "answer_reliability_question",
     "delay_ranking",
 }
 
@@ -78,10 +77,11 @@ Allowed tools:
 - mcp.get_corridor_reliability_pain_points parameters: limit int
 - mcp.get_delay_growth_segments parameters: limit int, min_growth_1min_events int
 - mcp.explain_reliability_pain_points_for_day parameters: service_date YYYY-MM-DD
-- mcp.answer_reliability_question parameters: question string
 - mcp.delay_ranking parameters: group_by "stop"|"weekday"|"hour"|"date"|"corridor"|"direction", date_from YYYY-MM-DD|null, date_to YYYY-MM-DD|null, weekday_only bool, hour_from int|null, hour_to int|null, stop_name string|null, direction string|null, order "highest"|"lowest", limit int
 - unsupported parameters: reason string
 Never choose mcp.query_readonly_sql.
+Never choose mcp.answer_reliability_question; use a specific analytics tool instead.
+For questions asking "how many delays" or "delays on" one day, choose mcp.delay_ranking with group_by="date", date_from=date_to=that day, order="highest".
 
 Question: {question}
 """.strip()
@@ -210,11 +210,6 @@ def _sanitize_mcp_params(tool: str, raw_params: dict[str, Any]) -> dict[str, Any
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", service_date):
             raise ValueError("service_date must be YYYY-MM-DD")
         return {"service_date": service_date}
-    if tool == "answer_reliability_question":
-        question = str(raw_params.get("question") or "")[:500]
-        if not question:
-            raise ValueError("question is required")
-        return {"question": question}
     if tool == "delay_ranking":
         valid_group_by = {"stop", "weekday", "hour", "date", "corridor", "direction"}
         gb = str(raw_params.get("group_by") or "stop").strip().lower()

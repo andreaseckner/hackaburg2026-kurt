@@ -168,6 +168,28 @@ def test_llm_cannot_call_readonly_sql_mcp_tool(db_path):
     assert response["ui"]["response_type"] == "fallback"
 
 
+def test_llm_rejects_generic_answer_reliability_mcp_tool(db_path):
+    def fake_classifier(question: str) -> dict:
+        return {
+            "tool": "mcp.answer_reliability_question",
+            "parameters": {"question": question},
+        }
+
+    def fake_mcp_tool_client(tool_name: str, arguments: dict) -> str:
+        raise AssertionError("generic wrapper MCP tool should not be called")
+
+    response = answer_transport_question_with_llm(
+        "how many delays was on the 11.11.205",
+        db_path=db_path,
+        classify_tool=fake_classifier,
+        call_mcp_tool=fake_mcp_tool_client,
+    )
+
+    assert response["intent"] == "unsupported"
+    assert response["metric_source"] == "none"
+    assert response["ui"]["response_type"] == "fallback"
+
+
 def test_llm_can_call_generic_stop_delay_extremes_mcp_tool(db_path):
     calls = []
 

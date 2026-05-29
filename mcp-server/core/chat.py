@@ -87,8 +87,17 @@ def _answer_weekday_morning_intervention(db_path: str | None) -> dict[str, Any]:
         weekday_only=True,
         hour_from=6,
         hour_to=10,
+        min_service_days=30,
         limit=3,
     )
+    if not rows:
+        rows = get_corridor_pain_points_filtered(
+            db_path=db_path,
+            weekday_only=True,
+            hour_from=6,
+            hour_to=10,
+            limit=3,
+        )
     if not rows:
         return _unsupported_response("No corridor data matched weekday morning filters.")
 
@@ -98,9 +107,11 @@ def _answer_weekday_morning_intervention(db_path: str | None) -> dict[str, Any]:
         title="Weekday morning intervention priority",
         answer=(
             f"Prioritize {top['route_start']} → {top['route_end']} for weekday mornings. "
-            f"It has {top['total_stop_delay_minutes']} stop-delay minutes in the filtered data."
+            f"Across all stop departures on this corridor, a typical weekday morning accumulates "
+            f"about {top['avg_daily_stop_delay_minutes']} delay minutes "
+            f"({top['total_stop_delay_minutes']} total minutes across {top['service_days']} service days)."
         ),
-        metric_source="corridor_pain_points_filtered weekday_only=true hour_from=6 hour_to=10",
+        metric_source="corridor_pain_points_filtered weekday_only=true hour_from=6 hour_to=10 min_service_days=30",
         data=rows,
         map_state={
             "layer_type": "corridor",
@@ -110,20 +121,25 @@ def _answer_weekday_morning_intervention(db_path: str | None) -> dict[str, Any]:
             "route_end": top["route_end"],
             "hour_from": 6,
             "hour_to": 10,
-            "severity_metric": "total_stop_delay_minutes",
+            "severity_metric": "avg_daily_stop_delay_minutes",
         },
     )
     response["bullets"] = [
-        f"{row['route_start']} → {row['route_end']}: {row['total_stop_delay_minutes']} stop-delay minutes, {row['pct_delayed_3min']}% events delayed 3+ min"
+        (
+            f"{row['route_start']} → {row['route_end']}: "
+            f"{row['avg_daily_stop_delay_minutes']} accumulated delay min per weekday morning "
+            f"({row['total_stop_delay_minutes']} total over {row['service_days']} days; "
+            f"{row['pct_delayed_3min']}% of stop events delayed 3+ min)"
+        )
         for row in rows
     ]
     response["ui"] = ranked_list_ui(
         title="Weekday morning corridors",
         rows=[{**row, "corridor": f"{row['route_start']} → {row['route_end']}"} for row in rows],
         label_key="corridor",
-        metric_key="total_stop_delay_minutes",
-        metric_label="Stop-delay minutes",
-        metric_unit="min",
+        metric_key="avg_daily_stop_delay_minutes",
+        metric_label="Accumulated delay",
+        metric_unit="min / weekday morning",
     )
     return response
 

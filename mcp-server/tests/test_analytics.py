@@ -229,9 +229,11 @@ def test_get_corridor_pain_points_filtered_supports_weekday_morning(db_path):
     )
 
     assert len(rows) == 2
-    assert rows[0]["route_start"] == "Start A"
-    assert rows[0]["route_end"] == "End B"
-    assert rows[0]["worst_hour"]["hour"] == 8
+    assert rows[0]["route_start"] == "End B"
+    assert rows[0]["route_end"] == "Start A"
+    assert rows[0]["avg_daily_stop_delay_minutes"] == 7.0
+    assert rows[0]["avg_daily_stop_events"] == 3.0
+    assert rows[0]["worst_hour"]["hour"] == 9
     assert rows[0]["worst_day"]["service_date"] == date(2024, 12, 12)
 
 

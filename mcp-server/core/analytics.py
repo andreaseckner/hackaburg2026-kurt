@@ -666,9 +666,11 @@ def get_corridor_pain_points_filtered(
     weekday_only: bool | None = None,
     hour_from: int | None = None,
     hour_to: int | None = None,
+    min_service_days: int = 1,
 ) -> list[dict[str, Any]]:
     """Rank corridor pain points with explicit time filters."""
     limit = _limit(limit)
+    min_service_days = max(1, int(min_service_days))
     clauses, params = _time_filter_clauses(hour_from, hour_to, weekday_only)
     clauses.extend(["route_start IS NOT NULL", "route_end IS NOT NULL"])
     where_sql = _where_sql(clauses)
@@ -680,16 +682,19 @@ def get_corridor_pain_points_filtered(
           COUNT(*) AS event_count,
           COUNT(DISTINCT service_date) AS service_days,
           ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0 / COUNT(DISTINCT service_date), 1) AS avg_daily_stop_delay_minutes,
+          ROUND(COUNT(*) * 1.0 / COUNT(DISTINCT service_date), 1) AS avg_daily_stop_events,
           ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
           SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
           ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_delayed_3min
         FROM departure_delay_events
         WHERE {where_sql}
         GROUP BY direction_id, route_start, route_end
-        ORDER BY total_stop_delay_minutes DESC, pct_delayed_3min DESC
+        HAVING COUNT(DISTINCT service_date) >= ?
+        ORDER BY avg_daily_stop_delay_minutes DESC, pct_delayed_3min DESC
         LIMIT ?
     """
-    rows = _query(db_path, sql, [*params, limit])
+    rows = _query(db_path, sql, [*params, min_service_days, limit])
     for row in rows:
         row_params = [*params, row["direction_id"], row["route_start"], row["route_end"]]
         row_clauses = [*clauses, "direction_id = ?", "route_start = ?", "route_end = ?"]
