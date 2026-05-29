@@ -13,6 +13,8 @@ import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart
 import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
+import 'dart:async';
+import 'dart:math' as math;
 
 class _RouteData {
   final String routeId;
@@ -30,6 +32,32 @@ class _RouteData {
     required this.labels,
     required this.stopIds,
   });
+}
+
+class _BusPlaybackState {
+  final String line;
+  final String rotation;
+  final int direction;
+  final Color color;
+  final LatLng position;
+  final double bearing;
+  final int? delaySeconds;
+
+  _BusPlaybackState({
+    required this.line,
+    required this.rotation,
+    required this.direction,
+    required this.color,
+    required this.position,
+    required this.bearing,
+    this.delaySeconds,
+  });
+}
+
+class _PathInterpolationResult {
+  final LatLng position;
+  final double bearing;
+  _PathInterpolationResult(this.position, this.bearing);
 }
 
 class HomeScreen extends StatefulWidget {
@@ -61,6 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _showBusLines = true;
   bool _showBusStops = true;
+  bool _showBusLineLabels = true;
+  bool _interpolateBuses = true;
   bool _controlPanelExpanded = true;
   bool _chatPanelOpen = false;
   bool _chatButtonHovered = false;
@@ -72,6 +102,15 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime? _firstTimestamp;
   DateTime? _lastTimestamp;
 
+  // Playback state variables
+  Timer? _playbackTimer;
+  bool _isPlaying = false;
+  int _playbackSpeed = 10;
+  DateTime? _currentPlaybackTime;
+  Map<String, List<RvvRecord>> _busTimelines = {};
+  List<_BusPlaybackState> _activeBuses = [];
+  Map<String, Stop> _stopMapByName = {};
+
   @override
   void initState() {
     super.initState();
@@ -80,6 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _playbackTimer?.cancel();
     _chatBloc.close();
     super.dispose();
   }
@@ -134,7 +174,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final allStopIds = <String>{};
         final polylines = <Polyline>[];
-        final labels = <Marker>[];
+        final proposedLabels = <Marker>[];
         final seenShapeIds = <String>{};
 
         for (var trip in routeTrips) {
@@ -157,7 +197,7 @@ class _HomeScreenState extends State<HomeScreen> {
               // Place a label at the midpoint of the shape
               if (shortName.isNotEmpty) {
                 final midIdx = points.length ~/ 2;
-                labels.add(
+                proposedLabels.add(
                   Marker(
                     point: points[midIdx],
                     width: 30,
@@ -191,6 +231,24 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
 
+        // De-duplicate labels that are too close (within ~880 meters)
+        final routeLabels = <Marker>[];
+        for (var label in proposedLabels) {
+          bool tooClose = false;
+          for (var existing in routeLabels) {
+            final dx = label.point.latitude - existing.point.latitude;
+            final dy = label.point.longitude - existing.point.longitude;
+            final distSq = dx * dx + dy * dy;
+            if (distSq < 0.000064) {
+              tooClose = true;
+              break;
+            }
+          }
+          if (!tooClose) {
+            routeLabels.add(label);
+          }
+        }
+
         if (polylines.isNotEmpty) {
           allRoutes.add(
             _RouteData(
@@ -198,12 +256,14 @@ class _HomeScreenState extends State<HomeScreen> {
               shortName: shortName,
               color: color,
               polylines: polylines,
-              labels: labels,
+              labels: routeLabels,
               stopIds: allStopIds,
             ),
           );
         }
       }
+
+      _stopMapByName = {for (var s in stops) s.name.trim().toLowerCase(): s};
 
       setState(() {
         _stops = stops;
@@ -220,6 +280,9 @@ class _HomeScreenState extends State<HomeScreen> {
           if (days.isNotEmpty) {
             _selectedDay = days.first;
             _updateTimestamps();
+            _currentPlaybackTime = _firstTimestamp;
+            _pregroupBusTimelines();
+            _updateActiveBuses();
           }
         }
       });
@@ -319,6 +382,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onRecFileChanged(String? newFile) {
     if (newFile == null) return;
+    _pausePlayback();
     setState(() {
       _selectedRecFile = newFile;
       final days = _getDaysForSelectedDataset();
@@ -328,15 +392,385 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedDay = null;
       }
       _updateTimestamps();
+      _currentPlaybackTime = _firstTimestamp;
+      _pregroupBusTimelines();
+      _updateActiveBuses();
     });
   }
 
   void _onDayChanged(DateTime? newDay) {
     if (newDay == null) return;
+    _pausePlayback();
     setState(() {
       _selectedDay = newDay;
       _updateTimestamps();
+      _currentPlaybackTime = _firstTimestamp;
+      _pregroupBusTimelines();
+      _updateActiveBuses();
     });
+  }
+
+  void _pregroupBusTimelines() {
+    if (_selectedRecFile == null || _selectedDay == null) {
+      _busTimelines = {};
+      return;
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final dayRecords = records
+        .where((r) => r.operationDay == _selectedDay)
+        .toList();
+
+    final timelines = <String, List<RvvRecord>>{};
+    for (var r in dayRecords) {
+      timelines.putIfAbsent(r.rotation, () => []).add(r);
+    }
+    for (var timeline in timelines.values) {
+      timeline.sort((a, b) => a.arrivalHalt.compareTo(b.arrivalHalt));
+    }
+    _busTimelines = timelines;
+  }
+
+  LatLng? _getStopPosition(String stopName) {
+    final key = stopName.trim().toLowerCase();
+    final stop = _stopMapByName[key];
+    if (stop != null) return stop.position;
+
+    for (var entry in _stopMapByName.entries) {
+      if (entry.key.contains(key) || key.contains(entry.key)) {
+        return entry.value.position;
+      }
+    }
+    return null;
+  }
+
+  double _distance(LatLng p1, LatLng p2) {
+    final dLat = p2.latitude - p1.latitude;
+    final dLon = p2.longitude - p1.longitude;
+    return dLat * dLat + dLon * dLon;
+  }
+
+  double _realDistance(LatLng p1, LatLng p2) {
+    final dLat = p2.latitude - p1.latitude;
+    final dLon = p2.longitude - p1.longitude;
+    return math.sqrt(dLat * dLat + dLon * dLon);
+  }
+
+  double _calculateBearing(LatLng p1, LatLng p2) {
+    final dLat = p2.latitude - p1.latitude;
+    final dLon = p2.longitude - p1.longitude;
+    return math.atan2(dLon, dLat) * 180 / math.pi;
+  }
+
+  Color _getRouteColor(String line) {
+    for (var r in _allRoutes) {
+      if (r.shortName == line || r.routeId == line) {
+        return r.color;
+      }
+    }
+    return Theme.of(context).colorScheme.primary;
+  }
+
+  List<LatLng> _getPathAlongPolyline(String line, LatLng start, LatLng end) {
+    _RouteData? routeData;
+    for (var r in _allRoutes) {
+      if (r.shortName == line || r.routeId == line) {
+        routeData = r;
+        break;
+      }
+    }
+    if (routeData == null || routeData.polylines.isEmpty) {
+      return [];
+    }
+
+    List<LatLng>? bestPath;
+    double bestDistanceSum = double.infinity;
+
+    for (var polyline in routeData.polylines) {
+      final points = polyline.points;
+      if (points.length < 2) continue;
+
+      int startIdx = -1;
+      double minStartDist = double.infinity;
+      int endIdx = -1;
+      double minEndDist = double.infinity;
+
+      for (int i = 0; i < points.length; i++) {
+        final distToStart = _distance(points[i], start);
+        if (distToStart < minStartDist) {
+          minStartDist = distToStart;
+          startIdx = i;
+        }
+
+        final distToEnd = _distance(points[i], end);
+        if (distToEnd < minEndDist) {
+          minEndDist = distToEnd;
+          endIdx = i;
+        }
+      }
+
+      if (startIdx != -1 && endIdx != -1) {
+        if (minStartDist < 0.0002 && minEndDist < 0.0002) {
+          final distanceSum = minStartDist + minEndDist;
+          if (distanceSum < bestDistanceSum) {
+            bestDistanceSum = distanceSum;
+
+            if (startIdx <= endIdx) {
+              bestPath = points.sublist(startIdx, endIdx + 1);
+            } else {
+              bestPath = points.sublist(endIdx, startIdx + 1).reversed.toList();
+            }
+          }
+        }
+      }
+    }
+
+    return bestPath ?? [];
+  }
+
+  _PathInterpolationResult _interpolateAlongPath(List<LatLng> path, double t) {
+    if (path.isEmpty) {
+      return _PathInterpolationResult(const LatLng(0, 0), 0.0);
+    }
+    if (path.length == 1) {
+      return _PathInterpolationResult(path.first, 0.0);
+    }
+
+    final segmentDistances = <double>[];
+    double totalDist = 0.0;
+
+    for (int j = 0; j < path.length - 1; j++) {
+      final d = _realDistance(path[j], path[j + 1]);
+      segmentDistances.add(d);
+      totalDist += d;
+    }
+
+    if (totalDist <= 0) {
+      return _PathInterpolationResult(path.first, 0.0);
+    }
+
+    final targetDist = t * totalDist;
+    double accumDist = 0.0;
+
+    for (int j = 0; j < segmentDistances.length; j++) {
+      final segLength = segmentDistances[j];
+      if (accumDist + segLength >= targetDist) {
+        final remaining = targetDist - accumDist;
+        final segT = segLength > 0 ? remaining / segLength : 0.0;
+
+        final p1 = path[j];
+        final p2 = path[j + 1];
+
+        final lat = p1.latitude + (p2.latitude - p1.latitude) * segT;
+        final lon = p1.longitude + (p2.longitude - p1.longitude) * segT;
+
+        return _PathInterpolationResult(
+          LatLng(lat, lon),
+          _calculateBearing(p1, p2),
+        );
+      }
+      accumDist += segLength;
+    }
+
+    return _PathInterpolationResult(
+      path.last,
+      _calculateBearing(path[path.length - 2], path.last),
+    );
+  }
+
+  void _updateActiveBuses() {
+    if (_currentPlaybackTime == null) {
+      _activeBuses = [];
+      return;
+    }
+
+    final activeBuses = <_BusPlaybackState>[];
+
+    _busTimelines.forEach((rotation, timeline) {
+      if (timeline.isEmpty) return;
+
+      final firstArr = timeline.first.arrivalHalt;
+      final lastDep = timeline.last.departureHalt;
+
+      if (_currentPlaybackTime!.isBefore(firstArr) ||
+          _currentPlaybackTime!.isAfter(lastDep)) {
+        return;
+      }
+
+      for (int i = 0; i < timeline.length; i++) {
+        final record = timeline[i];
+
+        if ((_currentPlaybackTime!.isAfter(record.arrivalHalt) &&
+                _currentPlaybackTime!.isBefore(record.departureHalt)) ||
+            _currentPlaybackTime!.isAtSameMomentAs(record.arrivalHalt) ||
+            _currentPlaybackTime!.isAtSameMomentAs(record.departureHalt)) {
+          final pos = _getStopPosition(record.stopName);
+          if (pos != null) {
+            double bearing = 0.0;
+            if (i < timeline.length - 1) {
+              final nextPos = _getStopPosition(timeline[i + 1].stopName);
+              if (nextPos != null) {
+                bearing = _calculateBearing(pos, nextPos);
+              }
+            }
+            activeBuses.add(
+              _BusPlaybackState(
+                line: record.line,
+                rotation: rotation,
+                direction: record.direction,
+                color: _getRouteColor(record.line),
+                position: pos,
+                bearing: bearing,
+                delaySeconds:
+                    record.scheduleDeviationDeparture ??
+                    record.scheduleDeviationArrival,
+              ),
+            );
+          }
+          return;
+        }
+
+        if (i < timeline.length - 1) {
+          final nextRecord = timeline[i + 1];
+          if (_currentPlaybackTime!.isAfter(record.departureHalt) &&
+              _currentPlaybackTime!.isBefore(nextRecord.arrivalHalt)) {
+            if (!_interpolateBuses) {
+              return;
+            }
+
+            final posI = _getStopPosition(record.stopName);
+            final posNext = _getStopPosition(nextRecord.stopName);
+
+            if (posI != null && posNext != null) {
+              final depTime = record.departureHalt;
+              final arrTime = nextRecord.arrivalHalt;
+              final totalDuration = arrTime.difference(depTime).inMilliseconds;
+              final elapsed = _currentPlaybackTime!
+                  .difference(depTime)
+                  .inMilliseconds;
+              final t = totalDuration > 0 ? elapsed / totalDuration : 0.0;
+
+              final polylinePoints = _getPathAlongPolyline(
+                record.line,
+                posI,
+                posNext,
+              );
+
+              LatLng pos;
+              double bearing;
+
+              if (polylinePoints.length >= 2) {
+                final result = _interpolateAlongPath(polylinePoints, t);
+                pos = result.position;
+                bearing = result.bearing;
+              } else {
+                final lat =
+                    posI.latitude + (posNext.latitude - posI.latitude) * t;
+                final lon =
+                    posI.longitude + (posNext.longitude - posI.longitude) * t;
+                pos = LatLng(lat, lon);
+                bearing = _calculateBearing(posI, posNext);
+              }
+
+              activeBuses.add(
+                _BusPlaybackState(
+                  line: record.line,
+                  rotation: rotation,
+                  direction: record.direction,
+                  color: _getRouteColor(record.line),
+                  position: pos,
+                  bearing: bearing,
+                  delaySeconds:
+                      record.scheduleDeviationDeparture ??
+                      record.scheduleDeviationArrival,
+                ),
+              );
+            }
+            return;
+          }
+        }
+      }
+    });
+
+    _activeBuses = activeBuses;
+  }
+
+  void _startPlayback() {
+    if (_playbackTimer != null) return;
+    setState(() {
+      _isPlaying = true;
+    });
+    _playbackTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (_currentPlaybackTime == null ||
+          _firstTimestamp == null ||
+          _lastTimestamp == null) {
+        _stopPlayback();
+        return;
+      }
+      final advanceSeconds = 3 * _playbackSpeed; // 50ms tick
+      final newTime = _currentPlaybackTime!.add(
+        Duration(seconds: advanceSeconds),
+      );
+      if (newTime.isAfter(_lastTimestamp!)) {
+        setState(() {
+          _currentPlaybackTime = _firstTimestamp;
+          _updateActiveBuses();
+        });
+      } else {
+        setState(() {
+          _currentPlaybackTime = newTime;
+          _updateActiveBuses();
+        });
+      }
+    });
+  }
+
+  void _pausePlayback() {
+    if (_playbackTimer == null) return;
+    _playbackTimer!.cancel();
+    _playbackTimer = null;
+    setState(() {
+      _isPlaying = false;
+    });
+  }
+
+  void _stopPlayback() {
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+    setState(() {
+      _isPlaying = false;
+      _currentPlaybackTime = _firstTimestamp;
+      _updateActiveBuses();
+    });
+  }
+
+  void _onSliderChanged(double value) {
+    if (_firstTimestamp == null || _lastTimestamp == null) return;
+    final total = _lastTimestamp!.difference(_firstTimestamp!).inSeconds;
+    final elapsed = (value * total).round();
+    setState(() {
+      _currentPlaybackTime = _firstTimestamp!.add(Duration(seconds: elapsed));
+      _updateActiveBuses();
+    });
+  }
+
+  Color _getDelayColor(int delaySeconds) {
+    if (delaySeconds <= 30) return Colors.green;
+    if (delaySeconds <= 180) return Colors.orange;
+    return Colors.red;
+  }
+
+  double get _playbackProgress {
+    if (_currentPlaybackTime == null ||
+        _firstTimestamp == null ||
+        _lastTimestamp == null) {
+      return 0.0;
+    }
+    final total = _lastTimestamp!.difference(_firstTimestamp!).inSeconds;
+    if (total <= 0) return 0.0;
+    final elapsed = _currentPlaybackTime!
+        .difference(_firstTimestamp!)
+        .inSeconds;
+    return (elapsed / total).clamp(0.0, 1.0);
   }
 
   @override
@@ -392,7 +826,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 userAgentPackageName: _userAgentPackage,
               ),
               if (_showBusLines) PolylineLayer(polylines: _filteredPolylines),
-              if (_showBusLines && _currentZoom >= _initialZoom)
+              if (_showBusLines &&
+                  _showBusLineLabels &&
+                  _currentZoom >= _initialZoom)
                 MarkerLayer(markers: _filteredLabels),
               if (_showBusStops)
                 MarkerLayer(
@@ -409,11 +845,61 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                   }).toList(),
                 ),
+              // Live bus markers layer
+              MarkerLayer(
+                markers: _activeBuses.map((bus) {
+                  final delayColor = _getDelayColor(bus.delaySeconds ?? 0);
+                  return Marker(
+                    point: bus.position,
+                    width: 32.0,
+                    height: 32.0,
+                    alignment: Alignment.center,
+                    child: Tooltip(
+                      message:
+                          'Line ${bus.line}\nUmlauf: ${bus.rotation}\nDelay: ${bus.delaySeconds != null ? "${(bus.delaySeconds! / 60).round()}m" : "N/A"}',
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: bus.color,
+                          border: Border.all(color: Colors.white, width: 2.0),
+                          boxShadow: [
+                            BoxShadow(
+                              color: delayColor.withValues(alpha: 0.95),
+                              blurRadius: 8.0,
+                              spreadRadius: 3.5,
+                            ),
+                            BoxShadow(
+                              color: delayColor.withValues(alpha: 0.85),
+                              blurRadius: 25.0,
+                              spreadRadius: 10.0,
+                            ),
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.15),
+                              blurRadius: 2.0,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Text(
+                            bus.line,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
             ],
           ),
           Positioned(
             top: 16,
-            right: 16,
+            left: 16,
             child: _controlPanelExpanded
                 ? Card(
                     elevation: 4,
@@ -435,6 +921,16 @@ class _HomeScreenState extends State<HomeScreen> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                  InkWell(
+                                    onTap: () => setState(
+                                      () => _controlPanelExpanded = false,
+                                    ),
+                                    child: const Icon(
+                                      Icons.chevron_left,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
                                   Text(
                                     l10n.controlPanelTitle,
                                     style: const TextStyle(
@@ -442,21 +938,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  InkWell(
-                                    onTap: () => setState(
-                                      () => _controlPanelExpanded = false,
-                                    ),
-                                    child: const Icon(
-                                      Icons.chevron_right,
-                                      size: 20,
-                                    ),
-                                  ),
                                 ],
                               ),
                               const SizedBox(height: 8),
                               Row(
-                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   const Icon(Icons.route, size: 18),
                                   const SizedBox(width: 8),
@@ -464,7 +949,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     'Bus Lines',
                                     style: TextStyle(fontSize: 13),
                                   ),
-                                  const SizedBox(width: 12),
+                                  const Spacer(),
                                   SizedBox(
                                     height: 28,
                                     width: 44,
@@ -480,7 +965,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 8),
                               Row(
-                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   const Icon(Icons.directions_bus, size: 18),
                                   const SizedBox(width: 8),
@@ -488,7 +972,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     'Bus Stops',
                                     style: TextStyle(fontSize: 13),
                                   ),
-                                  const SizedBox(width: 12),
+                                  const Spacer(),
                                   SizedBox(
                                     height: 28,
                                     width: 44,
@@ -497,6 +981,57 @@ class _HomeScreenState extends State<HomeScreen> {
                                         value: _showBusStops,
                                         onChanged: (v) =>
                                             setState(() => _showBusStops = v),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(Icons.label_outline, size: 18),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Line Labels',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
+                                  const Spacer(),
+                                  SizedBox(
+                                    height: 28,
+                                    width: 44,
+                                    child: FittedBox(
+                                      child: Switch(
+                                        value: _showBusLineLabels,
+                                        onChanged: (v) => setState(
+                                          () => _showBusLineLabels = v,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(Icons.linear_scale, size: 18),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Interpolate',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
+                                  const Spacer(),
+                                  SizedBox(
+                                    height: 28,
+                                    width: 44,
+                                    child: FittedBox(
+                                      child: Switch(
+                                        value: _interpolateBuses,
+                                        onChanged: (v) {
+                                          setState(() {
+                                            _interpolateBuses = v;
+                                            _updateActiveBuses();
+                                          });
+                                        },
                                       ),
                                     ),
                                   ),
@@ -602,7 +1137,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_chatPanelOpen)
             Positioned(
               right: 16,
-              bottom: 88,
+              bottom: 148,
               width: chatPanelWidth,
               child: BlocProvider.value(
                 value: _chatBloc,
@@ -615,7 +1150,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!_isLoading && _recFiles.isNotEmpty)
             Positioned(
               left: 16,
-              right: 104,
+              right: 140,
               bottom: 16,
               child: Card(
                 elevation: 6,
@@ -643,7 +1178,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            'Playback Controls',
+                            _currentPlaybackTime != null
+                                ? 'Playback: ${DateFormat('HH:mm:ss').format(_currentPlaybackTime!)}'
+                                : 'Playback Controls',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
@@ -738,9 +1275,29 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
+                      // Play/Pause, Progress Bar, and Speed Selection Row
                       Row(
                         children: [
+                          IconButton(
+                            icon: Icon(
+                              _isPlaying
+                                  ? Icons.pause_circle_filled
+                                  : Icons.play_circle_filled,
+                            ),
+                            iconSize: 36,
+                            color: theme.colorScheme.primary,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            onPressed: () {
+                              if (_isPlaying) {
+                                _pausePlayback();
+                              } else {
+                                _startPlayback();
+                              }
+                            },
+                          ),
+                          const SizedBox(width: 12),
                           Text(
                             _firstTimestamp != null
                                 ? DateFormat(
@@ -754,7 +1311,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          const SizedBox(width: 12),
                           Expanded(
                             child: SliderTheme(
                               data: SliderTheme.of(context).copyWith(
@@ -780,10 +1336,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 disabledThumbColor: theme.colorScheme.primary
                                     .withValues(alpha: 0.5),
                               ),
-                              child: const Slider(value: 0.0, onChanged: null),
+                              child: Slider(
+                                value: _playbackProgress,
+                                onChanged: _onSliderChanged,
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 12),
                           Text(
                             _lastTimestamp != null
                                 ? DateFormat('HH:mm:ss').format(_lastTimestamp!)
@@ -795,6 +1353,58 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
+                          const SizedBox(width: 16),
+                          // Speed Selection
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<int>(
+                                value: _playbackSpeed,
+                                icon: const Icon(Icons.speed, size: 14),
+                                isDense: true,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                focusColor: Colors.transparent,
+                                items: List.generate(30, (i) => i + 1).map((
+                                  speed,
+                                ) {
+                                  return DropdownMenuItem<int>(
+                                    value: speed,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                        right: 4.0,
+                                      ),
+                                      child: Text('${speed}x'),
+                                    ),
+                                  );
+                                }).toList(),
+                                onChanged: (val) {
+                                  if (val != null) {
+                                    setState(() {
+                                      _playbackSpeed = val;
+                                    });
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -802,9 +1412,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-          Positioned(
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOut,
             right: 20,
-            bottom: 20,
+            bottom: 70 - (_chatButtonHovered ? 48 : 42),
             child: MouseRegion(
               onEnter: (_) => setState(() => _chatButtonHovered = true),
               onExit: (_) => setState(() => _chatButtonHovered = false),
@@ -814,8 +1426,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 140),
                   curve: Curves.easeOut,
-                  width: _chatButtonHovered ? 76 : 64,
-                  height: _chatButtonHovered ? 76 : 64,
+                  width: _chatButtonHovered ? 96 : 84,
+                  height: _chatButtonHovered ? 96 : 84,
                   child: Material(
                     color: theme.colorScheme.surface,
                     shape: CircleBorder(
