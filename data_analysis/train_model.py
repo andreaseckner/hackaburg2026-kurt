@@ -28,7 +28,9 @@ def prepare_dataset(df):
         "departure_delay",
         "Fahrplan-Abw. Ankunft (Tür) AVG {s}",
         "Fahrplan-Abw. Abfahrt (Tür) AVG  {s}",
-        "date"
+        "date",
+        "Umlauf",
+        "Betriebstag"
     ]
 
     df = df.drop(columns=drop_cols, errors="ignore")
@@ -69,7 +71,7 @@ def xgboost(x_train, y_train, x_val, y_val):
 def train():
     df = load_and_clean("../../../BusDataStadtwerk/23.04.2025_09.05.2025_ITCS_nur_UniLinien.csv")
     df = create_features(df)
-
+    df["Umlauf_freq"] = df["Umlauf"].map(df["Umlauf"].value_counts())
     df = df.sort_values("Ankunft Haltestelle (Tür)").reset_index(drop=True)
     df = pd.get_dummies(
         df,
@@ -78,12 +80,10 @@ def train():
             "Richtung",
             "weekday",
             "time_period",
-            "Betriebstag",
             "hour",
         ],
         drop_first=True
     )
-
     x, y, df = prepare_dataset(df)
 
     print(list(df.columns))
