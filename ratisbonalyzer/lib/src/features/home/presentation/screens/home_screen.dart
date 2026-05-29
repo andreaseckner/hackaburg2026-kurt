@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:ratisbonalyzer/src/core/assets.gen.dart';
 import 'package:ratisbonalyzer/src/core/l10n/app_localizations.dart';
 import 'package:ratisbonalyzer/src/core/theme/dimens.dart';
+import 'package:ratisbonalyzer/src/features/chat/bloc/chat_bloc.dart';
+import 'package:ratisbonalyzer/src/features/chat/widgets/chat_panel.dart';
 import 'package:ratisbonalyzer/src/features/home/presentation/widgets/rvv_logo.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/gtfs_service.dart';
 import 'package:ratisbonalyzer/src/features/home/data/services/rvv_record_service.dart';
@@ -50,6 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final GtfsService _gtfsService = GtfsService();
   final RvvRecordService _rvvRecordService = RvvRecordService();
   final MapController _mapController = MapController();
+  final ChatBloc _chatBloc = ChatBloc();
   double _currentZoom = _initialZoom;
 
   List<Stop> _stops = [];
@@ -58,6 +62,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showBusLines = true;
   bool _showBusStops = true;
   bool _controlPanelExpanded = true;
+  bool _chatPanelOpen = false;
+  bool _chatButtonHovered = false;
   Set<String> _selectedRouteIds = {};
 
   Map<String, List<RvvRecord>> _recFiles = {};
@@ -70,6 +76,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _chatBloc.close();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -138,11 +150,9 @@ class _HomeScreenState extends State<HomeScreen> {
             seenShapeIds.add(shapeId);
             final points = shapeMap[shapeId];
             if (points != null && points.length >= 2) {
-              polylines.add(Polyline(
-                points: points,
-                strokeWidth: 3.0,
-                color: color,
-              ));
+              polylines.add(
+                Polyline(points: points, strokeWidth: 3.0, color: color),
+              );
 
               // Place a label at the midpoint of the shape
               if (shortName.isNotEmpty) {
@@ -154,8 +164,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     height: 18,
                     alignment: Alignment.center,
                     child: Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: color,
                         borderRadius: BorderRadius.circular(4),
@@ -180,14 +192,16 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (polylines.isNotEmpty) {
-          allRoutes.add(_RouteData(
-            routeId: routeId,
-            shortName: shortName,
-            color: color,
-            polylines: polylines,
-            labels: labels,
-            stopIds: allStopIds,
-          ));
+          allRoutes.add(
+            _RouteData(
+              routeId: routeId,
+              shortName: shortName,
+              color: color,
+              polylines: polylines,
+              labels: labels,
+              stopIds: allStopIds,
+            ),
+          );
         }
       }
 
@@ -196,7 +210,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _allRoutes = allRoutes;
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
         _recFiles = recFiles;
-        _selectedRecFile = recFiles.keys.isNotEmpty ? recFiles.keys.first : null;
+        _selectedRecFile = recFiles.keys.isNotEmpty
+            ? recFiles.keys.first
+            : null;
         _isLoading = false;
 
         if (_selectedRecFile != null) {
@@ -256,6 +272,14 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  void _toggleChatPanel() {
+    setState(() => _chatPanelOpen = !_chatPanelOpen);
+  }
+
+  void _closeChatPanel() {
+    setState(() => _chatPanelOpen = false);
+  }
+
   List<DateTime> _getDaysForSelectedDataset() {
     if (_selectedRecFile == null || !_recFiles.containsKey(_selectedRecFile)) {
       return [];
@@ -273,7 +297,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final records = _recFiles[_selectedRecFile]!;
-    final dayRecords = records.where((r) => r.operationDay == _selectedDay).toList();
+    final dayRecords = records
+        .where((r) => r.operationDay == _selectedDay)
+        .toList();
     if (dayRecords.isEmpty) {
       _firstTimestamp = null;
       _lastTimestamp = null;
@@ -317,6 +343,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
+    final screenSize = MediaQuery.sizeOf(context);
+    final chatPanelWidth = screenSize.width < 460
+        ? screenSize.width - 32
+        : 420.0;
+    final chatPanelHeight = screenSize.height < 680
+        ? screenSize.height - 160
+        : 540.0;
 
     return Scaffold(
       appBar: AppBar(
@@ -358,8 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 urlTemplate: _osmUrlTemplate,
                 userAgentPackageName: _userAgentPackage,
               ),
-              if (_showBusLines)
-                PolylineLayer(polylines: _filteredPolylines),
+              if (_showBusLines) PolylineLayer(polylines: _filteredPolylines),
               if (_showBusLines && _currentZoom >= _initialZoom)
                 MarkerLayer(markers: _filteredLabels),
               if (_showBusStops)
@@ -386,10 +418,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? Card(
                     elevation: 4,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: ConstrainedBox(
-                      constraints:
-                          const BoxConstraints(maxHeight: 400, maxWidth: 220),
+                      constraints: const BoxConstraints(
+                        maxHeight: 400,
+                        maxWidth: 220,
+                      ),
                       child: Padding(
                         padding: const EdgeInsets.all(12),
                         child: SingleChildScrollView(
@@ -410,9 +445,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: () => setState(
-                                        () => _controlPanelExpanded = false),
+                                      () => _controlPanelExpanded = false,
+                                    ),
                                     child: const Icon(
-                                        Icons.chevron_right, size: 20),
+                                      Icons.chevron_right,
+                                      size: 20,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -422,8 +460,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 children: [
                                   const Icon(Icons.route, size: 18),
                                   const SizedBox(width: 8),
-                                  const Text('Bus Lines',
-                                      style: TextStyle(fontSize: 13)),
+                                  const Text(
+                                    'Bus Lines',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                   const SizedBox(width: 12),
                                   SizedBox(
                                     height: 28,
@@ -444,8 +484,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 children: [
                                   const Icon(Icons.directions_bus, size: 18),
                                   const SizedBox(width: 8),
-                                  const Text('Bus Stops',
-                                      style: TextStyle(fontSize: 13)),
+                                  const Text(
+                                    'Bus Stops',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                   const SizedBox(width: 12),
                                   SizedBox(
                                     height: 28,
@@ -464,29 +506,36 @@ class _HomeScreenState extends State<HomeScreen> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Text('Filter',
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.bold)),
+                                  const Text(
+                                    'Filter',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: _selectAllRoutes,
-                                    child: const Text('All',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.blue,
-                                            decoration:
-                                                TextDecoration.underline)),
+                                    child: const Text(
+                                      'All',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(width: 8),
                                   InkWell(
                                     onTap: _selectNoRoutes,
-                                    child: const Text('None',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: Colors.blue,
-                                            decoration:
-                                                TextDecoration.underline)),
+                                    child: const Text(
+                                      'None',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.blue,
+                                        decoration: TextDecoration.underline,
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -495,19 +544,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                 spacing: 4,
                                 runSpacing: 4,
                                 children: _allRoutes.map((route) {
-                                  final selected = _selectedRouteIds
-                                      .contains(route.routeId);
+                                  final selected = _selectedRouteIds.contains(
+                                    route.routeId,
+                                  );
                                   return GestureDetector(
                                     onTap: () => _toggleRoute(route.routeId),
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 6, vertical: 3),
+                                        horizontal: 6,
+                                        vertical: 3,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: selected
                                             ? route.color
                                             : Colors.grey.shade200,
-                                        borderRadius:
-                                            BorderRadius.circular(4),
+                                        borderRadius: BorderRadius.circular(4),
                                         border: Border.all(
                                           color: route.color,
                                           width: 1.5,
@@ -536,10 +587,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 : Card(
                     elevation: 4,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     child: InkWell(
-                      onTap: () =>
-                          setState(() => _controlPanelExpanded = true),
+                      onTap: () => setState(() => _controlPanelExpanded = true),
                       borderRadius: BorderRadius.circular(12),
                       child: const Padding(
                         padding: EdgeInsets.all(10),
@@ -548,14 +599,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
           ),
-          if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(),
+          if (_chatPanelOpen)
+            Positioned(
+              right: 16,
+              bottom: 88,
+              width: chatPanelWidth,
+              child: BlocProvider.value(
+                value: _chatBloc,
+                child: ChatPanel(
+                  height: chatPanelHeight,
+                  onClose: _closeChatPanel,
+                ),
+              ),
             ),
           if (!_isLoading && _recFiles.isNotEmpty)
             Positioned(
               left: 16,
-              right: 16,
+              right: 104,
               bottom: 16,
               child: Card(
                 elevation: 6,
@@ -564,7 +624,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -588,13 +651,21 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           const Spacer(),
-                          // Dataset Dropdown
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
                             ),
                             child: DropdownButtonHideUnderline(
                               child: DropdownButton<String>(
@@ -607,7 +678,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     value: filename,
                                     child: Text(
                                       filename,
-                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
                                   );
                                 }).toList(),
@@ -616,28 +690,44 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          // Day Dropdown
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.08,
+                              ),
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.2,
+                                ),
+                              ),
                             ),
                             child: DropdownButtonHideUnderline(
                               child: DropdownButton<DateTime>(
                                 value: _selectedDay,
-                                icon: const Icon(Icons.calendar_today, size: 14),
+                                icon: const Icon(
+                                  Icons.calendar_today,
+                                  size: 14,
+                                ),
                                 isDense: true,
                                 focusColor: Colors.transparent,
                                 items: _getDaysForSelectedDataset().map((day) {
                                   return DropdownMenuItem<DateTime>(
                                     value: day,
                                     child: Padding(
-                                      padding: const EdgeInsets.only(right: 8.0),
+                                      padding: const EdgeInsets.only(
+                                        right: 8.0,
+                                      ),
                                       child: Text(
                                         DateFormat('dd.MM.yyyy').format(day),
-                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                        ),
                                       ),
                                     ),
                                   );
@@ -649,12 +739,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                      // Progress Bar / Slider with flanking timestamps
                       Row(
                         children: [
                           Text(
                             _firstTimestamp != null
-                                ? DateFormat('HH:mm:ss').format(_firstTimestamp!)
+                                ? DateFormat(
+                                    'HH:mm:ss',
+                                  ).format(_firstTimestamp!)
                                 : '--:--:--',
                             style: TextStyle(
                               fontSize: 12,
@@ -669,18 +760,27 @@ class _HomeScreenState extends State<HomeScreen> {
                               data: SliderTheme.of(context).copyWith(
                                 trackHeight: 4,
                                 activeTrackColor: theme.colorScheme.primary,
-                                inactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.12),
+                                inactiveTrackColor: theme.colorScheme.primary
+                                    .withValues(alpha: 0.12),
                                 thumbColor: theme.colorScheme.primary,
-                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                                disabledActiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.4),
-                                disabledInactiveTrackColor: theme.colorScheme.primary.withValues(alpha: 0.12),
-                                disabledThumbColor: theme.colorScheme.primary.withValues(alpha: 0.5),
+                                thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 6,
+                                ),
+                                overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 14,
+                                ),
+                                disabledActiveTrackColor: theme
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.4),
+                                disabledInactiveTrackColor: theme
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: 0.12),
+                                disabledThumbColor: theme.colorScheme.primary
+                                    .withValues(alpha: 0.5),
                               ),
-                              child: Slider(
-                                value: 0.0,
-                                onChanged: null, // Disabled for now (no playback logic yet)
-                              ),
+                              child: const Slider(value: 0.0, onChanged: null),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -702,6 +802,44 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+          Positioned(
+            right: 20,
+            bottom: 20,
+            child: MouseRegion(
+              onEnter: (_) => setState(() => _chatButtonHovered = true),
+              onExit: (_) => setState(() => _chatButtonHovered = false),
+              child: Tooltip(
+                message: 'Ask me anything!',
+                preferBelow: false,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  curve: Curves.easeOut,
+                  width: _chatButtonHovered ? 76 : 64,
+                  height: _chatButtonHovered ? 76 : 64,
+                  child: Material(
+                    color: theme.colorScheme.surface,
+                    shape: CircleBorder(
+                      side: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 2,
+                      ),
+                    ),
+                    elevation: _chatButtonHovered ? 12 : 8,
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _toggleChatPanel,
+                      child: Image.asset(
+                        'assets/img/kurt.jpg',
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],
       ),
     );

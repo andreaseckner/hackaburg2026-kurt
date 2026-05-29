@@ -35,6 +35,10 @@ Available analytics tools:
 - `get_bottleneck_stop_hotspots`
 - `compare_route_directions`
 - `explain_trip_delay_for_day`
+- `get_corridor_reliability_pain_points`
+- `get_delay_growth_segments`
+- `explain_reliability_pain_points_for_day`
+- `answer_reliability_question`
 - `query_readonly_sql`
 
 The first proper analytics are based on normalized departure delay semantics:
@@ -53,3 +57,5 @@ For human-facing answers, prefer trip-level delay metrics from `explain_trip_del
 - `total_stop_delay_minutes`: every delayed stop counted separately; useful as system burden, but not intuitive for users.
 
 Security note: read-only DuckDB connections disable external access, and the ad-hoc SQL tool accepts only a single SELECT statement with blocked write/DDL keywords.
+
+`answer_reliability_question` is a deterministic whitelist router for supported reliability questions. It does not call an LLM and does not generate SQL from the question. Unsupported questions return a structured fallback with suggested supported questions.

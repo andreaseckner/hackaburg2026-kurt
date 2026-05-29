@@ -47,12 +47,22 @@ Inspect first:
 python scripts/inspect_csvs.py data/raw
 ```
 
-Ingest into DuckDB:
+Ingest into DuckDB and build the analytics views:
 
 ```bash
 python scripts/ingest_csvs.py data/raw data/processed/transport.duckdb
 python scripts/create_views.py data/processed/transport.duckdb
 ```
+
+One-line rebuild after replacing files in `data/raw`:
+
+```bash
+python scripts/inspect_csvs.py data/raw \
+  && python scripts/ingest_csvs.py data/raw data/processed/transport.duckdb \
+  && python scripts/create_views.py data/processed/transport.duckdb
+```
+
+This rewrites `data/processed/transport.duckdb` from the CSV files currently in `data/raw`. The newer raw export format with `departure_delay` in minutes is supported; positive values are interpreted as late departures and converted to seconds for the analytics views.
 
 ## Current approach
 
