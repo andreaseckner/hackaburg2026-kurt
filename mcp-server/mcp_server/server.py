@@ -22,6 +22,7 @@ from core.analytics import (
     raw_table_overview,
     run_readonly_sql,
 )
+from core.chat import answer_transport_question
 from core.db import resolve_db_path
 
 
@@ -135,6 +136,13 @@ def explain_reliability_pain_points_for_day(service_date: str = "2024-12-12") ->
     """Return a demo-ready day story: worst corridor, hour, stops, and trip-level delay."""
     story = explain_pain_points_for_day(service_date=service_date)
     return json.dumps(story, default=str, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def answer_reliability_question(question: str) -> str:
+    """Answer a supported natural-language reliability question using deterministic analytics only."""
+    response = answer_transport_question(question)
+    return json.dumps(response, default=str, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()

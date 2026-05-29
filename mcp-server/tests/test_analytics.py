@@ -10,11 +10,14 @@ from core.analytics import (
     explain_pain_points_for_day,
     get_bottleneck_stops,
     get_corridor_pain_points,
+    get_corridor_pain_points_filtered,
     get_days_with_most_delays,
     get_delays_by_hour,
     get_delays_by_weekday,
     get_early_departures,
     get_segment_delay_growth_hotspots,
+    get_segment_delay_growth_hotspots_filtered,
+    get_stop_delay_exposure_filtered,
     get_trip_delay_summary,
     get_worst_stops,
     run_readonly_sql,
@@ -54,7 +57,9 @@ def db_path(tmp_path):
             (DATE '2024-12-12', 4, 'Thursday', 9, 1, 'Middle',  'M', 'M1', 120.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:10:00', 'End B', 'B', 'Start A', 'A'),
             (DATE '2024-12-12', 4, 'Thursday', 9, 1, 'Start A', 'A', 'A1', 300.0, 2, 'run-2', TIMESTAMP '2024-12-12 09:20:00', 'End B', 'B', 'Start A', 'A'),
             (DATE '2024-12-13', 5, 'Friday', 10, 1, 'Start A', 'A', 'A1', 30.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:00:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-13', 5, 'Friday', 10, 1, 'End B',   'B', 'B1', 90.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:20:00', 'Start A', 'A', 'End B', 'B')
+            (DATE '2024-12-13', 5, 'Friday', 10, 1, 'End B',   'B', 'B1', 90.0, 1, 'run-3', TIMESTAMP '2024-12-13 10:20:00', 'Start A', 'A', 'End B', 'B'),
+            (DATE '2024-12-13', 5, 'Friday', 17, 1, 'Suburb', 'S', 'S1', 0.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:00:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB'),
+            (DATE '2024-12-13', 5, 'Friday', 17, 1, 'Hauptbahnhof', 'HB', 'HB1', 120.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:12:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB')
         ) AS t(
             service_date,
             weekday_number,
@@ -173,6 +178,46 @@ def test_get_segment_delay_growth_hotspots_finds_where_delay_is_added(db_path):
     assert rows[0]["route_end"] == "Start A"
     assert rows[0]["avg_growth_seconds"] == 210.0
     assert rows[0]["growth_1min_events"] == 1
+
+
+def test_get_stop_delay_exposure_filtered_after_16_returns_stop_hotspots(db_path):
+    rows = get_stop_delay_exposure_filtered(db_path, hour_from=16, hour_to=23, limit=5)
+
+    assert rows
+    assert rows[0]["stop_name"] == "Hauptbahnhof"
+    assert rows[0]["total_stop_delay_minutes"] == 2.0
+    assert rows[0]["pct_delayed_3min"] == 0.0
+
+
+def test_get_corridor_pain_points_filtered_supports_weekday_morning(db_path):
+    rows = get_corridor_pain_points_filtered(
+        db_path,
+        weekday_only=True,
+        hour_from=6,
+        hour_to=10,
+        limit=2,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["route_start"] == "Start A"
+    assert rows[0]["route_end"] == "End B"
+    assert rows[0]["worst_hour"]["hour"] == 8
+    assert rows[0]["worst_day"]["service_date"] == date(2024, 12, 12)
+
+
+def test_get_segment_delay_growth_hotspots_filtered_toward_city_center(db_path):
+    rows = get_segment_delay_growth_hotspots_filtered(
+        db_path,
+        limit=3,
+        min_growth_1min_events=1,
+        toward_city_center=True,
+    )
+
+    assert rows
+    assert rows[0]["route_end"] == "Hauptbahnhof"
+    assert rows[0]["previous_stop"] == "S"
+    assert rows[0]["current_stop"] == "HB"
+    assert rows[0]["avg_growth_seconds"] == 120.0
 
 
 def test_explain_pain_points_for_day_returns_demo_ready_day_story(db_path):

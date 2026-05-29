@@ -24,6 +24,44 @@ def _limit(limit: int, maximum: int = 100) -> int:
     return max(1, min(int(limit), maximum))
 
 
+def _validate_hour(hour: int | None, name: str) -> None:
+    if hour is not None and not 0 <= int(hour) <= 23:
+        raise ValueError(f"{name} must be between 0 and 23")
+
+
+def _time_filter_clauses(
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    weekday_only: bool | None = None,
+) -> tuple[list[str], list[Any]]:
+    _validate_hour(hour_from, "hour_from")
+    _validate_hour(hour_to, "hour_to")
+    clauses: list[str] = []
+    params: list[Any] = []
+    if hour_from is not None:
+        clauses.append("planned_departure_hour >= ?")
+        params.append(int(hour_from))
+    if hour_to is not None:
+        clauses.append("planned_departure_hour <= ?")
+        params.append(int(hour_to))
+    if weekday_only is True:
+        clauses.append("weekday_number BETWEEN 1 AND 5")
+    return clauses, params
+
+
+def _where_sql(clauses: list[str]) -> str:
+    return " AND ".join(clauses) if clauses else "TRUE"
+
+
+_CITY_CENTER_STOP_KEYWORDS = (
+    "hauptbahnhof",
+    "dachauplatz",
+    "arnulfsplatz",
+    "albertstraße",
+    "albertstrasse",
+)
+
+
 def list_tables(db_path: str | None = None) -> list[str]:
     with connect(db_path) as con:
         rows = con.execute(
@@ -493,6 +531,211 @@ def get_segment_delay_growth_hotspots(
         LIMIT ?
     """
     return _query(db_path, sql, [min_growth_1min_events, limit])
+
+
+def get_stop_delay_exposure_filtered(
+    db_path: str | None = None,
+    limit: int = 10,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    weekday_only: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Rank stop-level passenger delay exposure with explicit time filters."""
+    limit = _limit(limit)
+    clauses, params = _time_filter_clauses(hour_from, hour_to, weekday_only)
+    clauses.append("stop_name IS NOT NULL")
+    sql = f"""
+        SELECT
+          stop_name,
+          stop_code,
+          stop_point,
+          COUNT(*) AS event_count,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_delayed_3min
+        FROM departure_delay_events
+        WHERE {_where_sql(clauses)}
+        GROUP BY stop_name, stop_code, stop_point
+        ORDER BY total_stop_delay_minutes DESC, pct_delayed_3min DESC
+        LIMIT ?
+    """
+    return _query(db_path, sql, [*params, limit])
+
+
+def get_corridor_pain_points_filtered(
+    db_path: str | None = None,
+    limit: int = 10,
+    weekday_only: bool | None = None,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+) -> list[dict[str, Any]]:
+    """Rank corridor pain points with explicit time filters."""
+    limit = _limit(limit)
+    clauses, params = _time_filter_clauses(hour_from, hour_to, weekday_only)
+    clauses.extend(["route_start IS NOT NULL", "route_end IS NOT NULL"])
+    where_sql = _where_sql(clauses)
+    sql = f"""
+        SELECT
+          direction_id,
+          route_start,
+          route_end,
+          COUNT(*) AS event_count,
+          COUNT(DISTINCT service_date) AS service_days,
+          ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+          ROUND(AVG(GREATEST(departure_delay_seconds, 0)), 1) AS avg_positive_delay_seconds,
+          SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events,
+          ROUND(100.0 * SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_delayed_3min
+        FROM departure_delay_events
+        WHERE {where_sql}
+        GROUP BY direction_id, route_start, route_end
+        ORDER BY total_stop_delay_minutes DESC, pct_delayed_3min DESC
+        LIMIT ?
+    """
+    rows = _query(db_path, sql, [*params, limit])
+    for row in rows:
+        row_params = [*params, row["direction_id"], row["route_start"], row["route_end"]]
+        row_clauses = [*clauses, "direction_id = ?", "route_start = ?", "route_end = ?"]
+        row_where_sql = _where_sql(row_clauses)
+        worst_hour = _query(
+            db_path,
+            f"""
+            SELECT
+              CAST(planned_departure_hour AS INTEGER) AS hour,
+              ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+              SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events
+            FROM departure_delay_events
+            WHERE {row_where_sql}
+              AND planned_departure_hour IS NOT NULL
+            GROUP BY planned_departure_hour
+            ORDER BY total_stop_delay_minutes DESC
+            LIMIT 1
+            """,
+            row_params,
+        )
+        worst_day = _query(
+            db_path,
+            f"""
+            SELECT
+              service_date,
+              weekday_name,
+              ROUND(SUM(GREATEST(departure_delay_seconds, 0)) / 60.0, 1) AS total_stop_delay_minutes,
+              SUM(CASE WHEN departure_delay_seconds >= 180 THEN 1 ELSE 0 END) AS delayed_3min_events
+            FROM departure_delay_events
+            WHERE {row_where_sql}
+            GROUP BY service_date, weekday_name
+            ORDER BY total_stop_delay_minutes DESC
+            LIMIT 1
+            """,
+            row_params,
+        )
+        row["worst_hour"] = worst_hour[0] if worst_hour else None
+        row["worst_day"] = worst_day[0] if worst_day else None
+    return rows
+
+
+def get_segment_delay_growth_hotspots_filtered(
+    db_path: str | None = None,
+    limit: int = 10,
+    min_growth_1min_events: int = 10,
+    hour_from: int | None = None,
+    hour_to: int | None = None,
+    toward_city_center: bool = False,
+) -> list[dict[str, Any]]:
+    """Find trip-safe delay-growth segments with explicit demo filters."""
+    limit = _limit(limit)
+    min_growth_1min_events = max(1, int(min_growth_1min_events))
+    clauses, params = _time_filter_clauses(hour_from, hour_to)
+    event_filter = _where_sql([f"e.{clause}" for clause in clauses])
+    city_filter = ""
+    if toward_city_center:
+        city_filter = (
+            "AND REGEXP_MATCHES("
+            "LOWER(CONCAT_WS(' ', route_end, previous_stop, stop_name, previous_stop_code, stop_code)), ?"
+            ")"
+        )
+    sql = f"""
+        WITH trip_starts AS (
+          SELECT
+            service_date,
+            line_id,
+            direction_id,
+            run_id,
+            route_start,
+            route_start_code,
+            route_end,
+            route_end_code,
+            planned_departure AS trip_start_time,
+            LEAD(planned_departure) OVER (
+              PARTITION BY service_date, line_id, direction_id, run_id, route_start, route_end
+              ORDER BY planned_departure
+            ) AS next_trip_start_time
+          FROM departure_delay_events
+          WHERE stop_name = route_start OR stop_code = route_start_code
+        ),
+        trip_events AS (
+          SELECT
+            t.service_date,
+            t.line_id,
+            t.direction_id,
+            t.run_id,
+            t.route_start,
+            t.route_end,
+            t.trip_start_time,
+            e.stop_name,
+            e.stop_code,
+            e.planned_departure,
+            e.departure_delay_seconds
+          FROM trip_starts t
+          JOIN departure_delay_events e
+            ON e.service_date = t.service_date
+           AND e.line_id = t.line_id
+           AND e.direction_id = t.direction_id
+           AND e.run_id = t.run_id
+           AND e.route_start = t.route_start
+           AND e.route_end = t.route_end
+           AND e.planned_departure >= t.trip_start_time
+           AND (t.next_trip_start_time IS NULL OR e.planned_departure < t.next_trip_start_time)
+          WHERE {event_filter}
+        ),
+        sequenced AS (
+          SELECT
+            *,
+            LAG(stop_name) OVER trip_window AS previous_stop,
+            LAG(stop_code) OVER trip_window AS previous_stop_code,
+            departure_delay_seconds - LAG(departure_delay_seconds) OVER trip_window AS delay_growth_seconds
+          FROM trip_events
+          WINDOW trip_window AS (
+            PARTITION BY service_date, line_id, direction_id, run_id, route_start, route_end, trip_start_time
+            ORDER BY planned_departure
+          )
+        )
+        SELECT
+          route_start,
+          route_end,
+          COALESCE(previous_stop_code, previous_stop) AS previous_stop,
+          previous_stop AS previous_stop_abbrev,
+          COALESCE(stop_code, stop_name) AS current_stop,
+          stop_name AS current_stop_abbrev,
+          COUNT(*) AS segment_events,
+          ROUND(AVG(delay_growth_seconds), 1) AS avg_growth_seconds,
+          ROUND(SUM(GREATEST(delay_growth_seconds, 0)) / 60.0, 1) AS total_positive_growth_minutes,
+          SUM(CASE WHEN delay_growth_seconds >= 60 THEN 1 ELSE 0 END) AS growth_1min_events
+        FROM sequenced
+        WHERE delay_growth_seconds IS NOT NULL
+          AND previous_stop IS NOT NULL
+          AND stop_name IS NOT NULL
+          {city_filter}
+        GROUP BY route_start, route_end, previous_stop, previous_stop_code, stop_name, stop_code
+        HAVING growth_1min_events >= ?
+        ORDER BY total_positive_growth_minutes DESC, avg_growth_seconds DESC
+        LIMIT ?
+    """
+    query_params = [*params]
+    if toward_city_center:
+        query_params.append("|".join(_CITY_CENTER_STOP_KEYWORDS))
+    query_params.extend([min_growth_1min_events, limit])
+    return _query(db_path, sql, query_params)
 
 
 def explain_pain_points_for_day(db_path: str | None = None, service_date: str = "2024-12-12") -> dict[str, Any]:

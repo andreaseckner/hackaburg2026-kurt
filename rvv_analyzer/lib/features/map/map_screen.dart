@@ -4,6 +4,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:rvv_analyzer/core/dimens.dart';
 import 'package:rvv_analyzer/core/l10n/app_localizations.dart';
+import 'package:rvv_analyzer/features/chat/bloc/chat_bloc.dart';
+import 'package:rvv_analyzer/features/chat/widgets/chat_panel.dart';
 import 'package:rvv_analyzer/features/map/bloc/map_bloc.dart';
 import 'package:rvv_analyzer/features/map/bloc/map_event.dart';
 import 'package:rvv_analyzer/features/map/bloc/map_state.dart';
@@ -57,6 +59,10 @@ class _MapView extends StatelessWidget {
             title: Text(l10n.appTitle),
             actions: [
               if (state.status == MapStatus.loaded) ...[
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  onPressed: () => _showChatPanel(context),
+                ),
                 IconButton(
                   icon: const Icon(Icons.filter_list),
                   onPressed: () => _showFilterDialog(context, sortedRoutes),
@@ -157,6 +163,19 @@ class _MapView extends StatelessWidget {
                     ),
                   ],
                 ),
+        );
+      },
+    );
+  }
+
+  void _showChatPanel(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (modalContext) {
+        return BlocProvider(
+          create: (_) => ChatBloc(),
+          child: const ChatPanel(),
         );
       },
     );
