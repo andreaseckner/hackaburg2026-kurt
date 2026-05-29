@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Transport source data and generated databases
+mcp-server/data/raw/*
+!mcp-server/data/raw/.gitkeep
+mcp-server/data/processed/*
+!mcp-server/data/processed/.gitkeep
+*.duckdb
+*.duckdb.wal
+*.db
+*.sqlite
+*.sqlite3
+
+# Large local exports
+*.csv
+*.tsv
+*.parquet
+*.xlsx
+*.zip
