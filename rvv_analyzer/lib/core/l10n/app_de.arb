@@ -1,0 +1,9 @@
+{
+  "appTitle": "R.A.T. (RVV Analyzing Tool)",
+  "filterBusLines": "Buslinien filtern",
+  "all": "Alle",
+  "none": "Keine",
+  "line": "Linie {lineName}",
+  "stop": "Haltestelle: {stopName}",
+  "errorLoadingGtfs": "Fehler beim Laden der GTFS-Daten: {error}"
+}

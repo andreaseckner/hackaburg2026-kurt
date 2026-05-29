@@ -1,0 +1,45 @@
+{
+  "appTitle": "R.A.T. (RVV Analyzing Tool)",
+  "@appTitle": {
+    "description": "The title for the application"
+  },
+  "filterBusLines": "Filter Bus Lines",
+  "@filterBusLines": {
+    "description": "Title for the filter dialog"
+  },
+  "all": "All",
+  "@all": {
+    "description": "Label for selecting all items"
+  },
+  "none": "None",
+  "@none": {
+    "description": "Label for deselecting all items"
+  },
+  "line": "Line {lineName}",
+  "@line": {
+    "description": "Label for a bus line",
+    "placeholders": {
+      "lineName": {
+        "type": "String"
+      }
+    }
+  },
+  "stop": "Stop: {stopName}",
+  "@stop": {
+    "description": "Label for a bus stop",
+    "placeholders": {
+      "stopName": {
+        "type": "String"
+      }
+    }
+  },
+  "errorLoadingGtfs": "Error loading GTFS data: {error}",
+  "@errorLoadingGtfs": {
+    "description": "Error message when GTFS data fails to load",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  }
+}

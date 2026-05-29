@@ -1,0 +1,20 @@
+# Flutter-related
+**/Flutter/ephemeral/
+**/Flutter/GeneratedPluginRegistrant.swift
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+**/Pods/
+**/.symlinks/
+
+# Xcode-related
+**/dgph
+**/xcuserdata/
+**/DerivedData/
+*.mode1v3
+*.mode2v3
+*.moved-aside
+*.pbxuser
+*.perspectivev3
+**/*sync/
+.sconsign.dblite
+.tags*
