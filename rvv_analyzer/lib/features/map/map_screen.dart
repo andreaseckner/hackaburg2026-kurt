@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:rvv_analyzer/core/dimens.dart';
 import 'package:rvv_analyzer/core/l10n/app_localizations.dart';
@@ -52,11 +53,24 @@ class _MapView extends StatelessWidget {
         final sortedRoutes = uniqueRoutes.values.toList()
           ..sort((a, b) => a.lineName.compareTo(b.lineName));
 
+        final activeVehicles = state.activeVehicles.where((v) {
+          return state.enabledRouteIds.contains(v.lineId) ||
+              state.allConnections.any(
+                (conn) =>
+                    conn.lineName == v.lineId &&
+                    state.enabledRouteIds.contains(conn.routeId),
+              );
+        }).toList();
+
         return Scaffold(
           appBar: AppBar(
             title: Text(l10n.appTitle),
             actions: [
               if (state.status == MapStatus.loaded) ...[
+                IconButton(
+                  icon: const Icon(Icons.calendar_month),
+                  onPressed: () => _selectDay(context, state),
+                ),
                 IconButton(
                   icon: const Icon(Icons.filter_list),
                   onPressed: () => _showFilterDialog(context, sortedRoutes),
@@ -64,102 +78,113 @@ class _MapView extends StatelessWidget {
               ],
             ],
           ),
-          body: state.status == MapStatus.loading
-              ? const Center(child: CircularProgressIndicator())
-              : FlutterMap(
-                  options: const MapOptions(
-                    initialCenter: _initialCenter,
-                    initialZoom: Dimens.initialZoom,
+          body: Stack(
+            children: [
+              FlutterMap(
+                options: const MapOptions(
+                  initialCenter: _initialCenter,
+                  initialZoom: Dimens.initialZoom,
+                ),
+                children: [
+                  TileLayer(
+                    urlTemplate: _osmUrlTemplate,
+                    userAgentPackageName: _userAgentPackage,
                   ),
-                  children: [
-                    TileLayer(
-                      urlTemplate: _osmUrlTemplate,
-                      userAgentPackageName: _userAgentPackage,
-                    ),
-                    PolylineLayer(
-                      polylines: state.filteredConnections.map((conn) {
-                        return Polyline(
-                          points: conn.points,
-                          color: conn.color.withAlpha(Dimens.polylineAlpha),
-                          strokeWidth: Dimens.polylineStrokeWidth,
-                        );
-                      }).toList(),
-                    ),
-                    MarkerLayer(
-                      markers: state.filteredConnections.expand((conn) {
-                        return conn.midpoints.map((midpoint) {
-                          return Marker(
-                            point: midpoint,
-                            width: Dimens.markerWidth,
-                            height: Dimens.markerHeight,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: Dimens.paddingSmall,
-                                vertical: Dimens.paddingSmall / 2,
+                  PolylineLayer(
+                    polylines: state.filteredConnections.map((conn) {
+                      return Polyline(
+                        points: conn.points,
+                        color: conn.color.withAlpha(Dimens.polylineAlpha),
+                        strokeWidth: Dimens.polylineStrokeWidth,
+                      );
+                    }).toList(),
+                  ),
+                  // Stop Markers
+                  MarkerLayer(
+                    markers: state.allStops.map((stop) {
+                      return Marker(
+                        point: stop.location,
+                        width: Dimens.stopMarkerSize,
+                        height: Dimens.stopMarkerSize,
+                        child: Icon(
+                          Icons.circle,
+                          color: Colors.blue.withValues(alpha: 0.3),
+                          size: 8,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  // Active Vehicle Markers
+                  MarkerLayer(
+                    markers: activeVehicles.map((v) {
+                      Color color = Colors.green;
+                      if (v.delaySeconds > 300) {
+                        color = Colors.red;
+                      } else if (v.delaySeconds > 60) {
+                        color = Colors.orange;
+                      }
+
+                      return Marker(
+                        point: v.location,
+                        width: 32,
+                        height: 32,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.3),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
                               ),
-                              decoration: BoxDecoration(
-                                color: conn.color,
-                                borderRadius: BorderRadius.circular(
-                                  Dimens.borderRadiusSmall,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withAlpha(
-                                      Dimens.shadowAlpha,
-                                    ),
-                                    blurRadius: Dimens.shadowBlurRadius,
-                                    offset: const Offset(
-                                      Dimens.shadowOffsetX,
-                                      Dimens.shadowOffsetY,
-                                    ),
-                                  ),
-                                ],
+                            ],
+                          ),
+                          child: Center(
+                            child: Text(
+                              v.lineId,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
                               ),
-                              child: Center(
-                                child: Text(
-                                  conn.lineName,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: Dimens.fontSizeSmall,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                          );
-                        });
-                      }).toList(),
-                    ),
-                    MarkerLayer(
-                      markers: state.allStops.map((stop) {
-                        return Marker(
-                          point: stop.location,
-                          width: Dimens.stopMarkerSize,
-                          height: Dimens.stopMarkerSize,
-                          child: GestureDetector(
-                            onTap: () {
-                              ScaffoldMessenger.of(
-                                context,
-                              ).hideCurrentSnackBar();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(l10n.stop(stop.name))),
-                              );
-                            },
-                            child: const Icon(
-                              Icons.directions_bus,
-                              color: Colors.blue,
-                              size: Dimens.iconSizeSmall,
                             ),
                           ),
-                        );
-                      }).toList(),
-                    ),
-                  ],
-                ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+              if (state.status == MapStatus.loading)
+                const Center(child: CircularProgressIndicator()),
+              _PlaybackControlPanel(state: state),
+            ],
+          ),
         );
       },
     );
+  }
+
+  Future<void> _selectDay(BuildContext context, MapState state) async {
+    if (state.availableDays.isEmpty) return;
+
+    final initialDate = state.selectedDay ?? state.availableDays.first;
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: state.availableDays.reduce((a, b) => a.isBefore(b) ? a : b),
+      lastDate: state.availableDays.reduce((a, b) => a.isAfter(b) ? a : b),
+      selectableDayPredicate: (date) {
+        return state.availableDays.any((d) =>
+            d.year == date.year && d.month == date.month && d.day == date.day);
+      },
+    );
+
+    if (pickedDate != null && context.mounted) {
+      context.read<MapBloc>().add(MapDaySelected(pickedDate));
+    }
   }
 
   void _showFilterDialog(BuildContext context, List<GtfsConnection> routes) {
@@ -266,6 +291,134 @@ class _MapView extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _PlaybackControlPanel extends StatelessWidget {
+  final MapState state;
+
+  const _PlaybackControlPanel({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    if (state.currentPlaybackTime == null) {
+      return const SizedBox.shrink();
+    }
+
+    final eventsForDay = state.currentDayEvents.values.expand((e) => e).toList();
+    if (eventsForDay.isEmpty) return const SizedBox.shrink();
+
+    final startTime = eventsForDay
+        .map((e) => e.arrivalTimeActual)
+        .reduce((a, b) => a.isBefore(b) ? a : b);
+    final endTime = eventsForDay
+        .map((e) => e.departureTimeActual)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+
+    final totalDuration = endTime.difference(startTime).inSeconds;
+    final currentOffset =
+        state.currentPlaybackTime!.difference(startTime).inSeconds;
+
+    final dateFormat = DateFormat('dd.MM.yyyy');
+    final timeFormat = DateFormat('HH:mm:ss');
+
+    return Positioned(
+      bottom: 16,
+      left: 16,
+      right: 16,
+      child: Card(
+        elevation: 4,
+        color: Colors.white.withValues(alpha: 0.95),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    icon: Icon(state.isPlaying ? Icons.pause : Icons.play_arrow),
+                    color: Theme.of(context).primaryColor,
+                    onPressed: () {
+                      if (state.isPlaying) {
+                        context.read<MapBloc>().add(const MapPlaybackPaused());
+                      } else {
+                        context.read<MapBloc>().add(const MapPlaybackStarted());
+                      }
+                    },
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        dateFormat.format(state.currentPlaybackTime!),
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                      Text(
+                        timeFormat.format(state.currentPlaybackTime!),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: currentOffset.toDouble().clamp(0, totalDuration.toDouble()),
+                      max: totalDuration.toDouble() > 0 ? totalDuration.toDouble() : 1.0,
+                      onChanged: (value) {
+                        final newTime =
+                            startTime.add(Duration(seconds: value.toInt()));
+                        context
+                            .read<MapBloc>()
+                            .add(MapPlaybackTimeChanged(newTime));
+                      },
+                    ),
+                  ),
+                  Text(timeFormat.format(endTime), style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('Playback Speed:', style: TextStyle(fontSize: 12)),
+                    const SizedBox(width: 8),
+                    _SpeedChip(speed: 60, current: state.playbackSpeed, label: '1 min/s'),
+                    _SpeedChip(speed: 120, current: state.playbackSpeed, label: '2 min/s'),
+                    _SpeedChip(speed: 300, current: state.playbackSpeed, label: '5 min/s'),
+                    _SpeedChip(speed: 600, current: state.playbackSpeed, label: '10 min/s'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SpeedChip extends StatelessWidget {
+  final double speed;
+  final double current;
+  final String label;
+
+  const _SpeedChip({required this.speed, required this.current, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = speed == current;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: ChoiceChip(
+        label: Text(label, style: const TextStyle(fontSize: 11)),
+        selected: isSelected,
+        onSelected: (_) {
+          context.read<MapBloc>().add(MapPlaybackSpeedChanged(speed));
+        },
+      ),
     );
   }
 }

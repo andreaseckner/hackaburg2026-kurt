@@ -32,4 +32,15 @@ class Assets {
   const Assets._();
 
   static const $AssetsGtfsGen gtfs = $AssetsGtfsGen();
+  static const $AssetsRecGen rec = $AssetsRecGen();
+}
+
+class $AssetsRecGen {
+  const $AssetsRecGen();
+
+  /// File path: assets/rec/october_2024.csv
+  String get october2024 => 'assets/rec/october_2024.csv';
+
+  /// List of all assets
+  List<String> get values => [october2024];
 }

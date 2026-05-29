@@ -120,6 +120,7 @@ class GtfsParser {
       }
 
       if (points.isNotEmpty) {
+        final List<String> currentStopIds = sequence.map((s) => s.stopId).toList();
         connections.add(
           GtfsConnection(
             tripId: tripId,
@@ -127,6 +128,7 @@ class GtfsParser {
             lineName: lineName,
             points: points,
             midpoints: midpoints,
+            stopIds: currentStopIds,
             color: color,
           ),
         );
