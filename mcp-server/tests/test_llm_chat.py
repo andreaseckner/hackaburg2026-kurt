@@ -21,8 +21,8 @@ def db_path(tmp_path):
             (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'Start A', 'A', 'A1',  60.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:00:00', 'Start A', 'A', 'End B', 'B'),
             (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'Middle',  'M', 'M1', 240.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:10:00', 'Start A', 'A', 'End B', 'B'),
             (DATE '2024-12-12', 4, 'Thursday', 8, 1, 'End B',   'B', 'B1', 180.0, 1, 'run-1', TIMESTAMP '2024-12-12 08:20:00', 'Start A', 'A', 'End B', 'B'),
-            (DATE '2024-12-13', 5, 'Friday', 17, 1, 'Suburb', 'S', 'S1', 0.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:00:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB'),
-            (DATE '2024-12-13', 5, 'Friday', 17, 1, 'Hauptbahnhof', 'HB', 'HB1', 120.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:12:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB')
+            (DATE '2024-12-13', 5, 'Friday', 17, 3, 'Suburb', 'S', 'S1', 0.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:00:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB'),
+            (DATE '2024-12-13', 5, 'Friday', 17, 3, 'Hauptbahnhof', 'HB', 'HB1', 120.0, 3, 'run-4', TIMESTAMP '2024-12-13 17:12:00', 'Suburb', 'S', 'Hauptbahnhof', 'HB')
         ) AS t(
             service_date,
             weekday_number,
@@ -117,6 +117,51 @@ def test_llm_missing_classifier_falls_back_to_deterministic_router(monkeypatch, 
     assert response["ui"]["response_type"] == "ranked_list"
 
 
+def test_line_delay_question_uses_deterministic_line_filter(db_path):
+    response = answer_transport_question_with_llm(
+        "can you please give me all the delays from bus line 1?",
+        db_path=db_path,
+        classify_tool=lambda question: (_ for _ in ()).throw(AssertionError("classifier should not be needed")),
+    )
+
+    assert response["mode"] == "deterministic_fallback"
+    assert response["intent"] == "line_delay_summary"
+    assert response["metric_source"] == "delay_ranking group_by=date line_id=1 hour_from=None hour_to=None"
+    assert response["data"]
+    assert sum(row["event_count"] for row in response["data"]) == 3
+
+
+def test_line_rush_hour_overall_question_uses_deterministic_filters(db_path):
+    response = answer_transport_question_with_llm(
+        "bus line 1 rushhour delay overall?",
+        db_path=db_path,
+        classify_tool=lambda question: (_ for _ in ()).throw(AssertionError("classifier should not be needed")),
+    )
+
+    assert response["mode"] == "deterministic_fallback"
+    assert response["intent"] == "line_delay_summary"
+    assert response["metric_source"] == "delay_ranking group_by=overall line_id=1 hour_from=7 hour_to=18"
+    assert response["map_state"]["hour_from"] == 7
+    assert response["map_state"]["hour_to"] == 18
+    assert response["data"][0]["scope"] == "overall"
+    assert response["data"][0]["event_count"] == 3
+
+
+def test_line_between_hours_question_uses_deterministic_filters(db_path):
+    response = answer_transport_question_with_llm(
+        "give me all delays of the line 3 in between 4pm to 6pm",
+        db_path=db_path,
+        classify_tool=lambda question: (_ for _ in ()).throw(AssertionError("classifier should not be needed")),
+    )
+
+    assert response["mode"] == "deterministic_fallback"
+    assert response["intent"] == "line_delay_summary"
+    assert response["metric_source"] == "delay_ranking group_by=date line_id=3 hour_from=16 hour_to=18"
+    assert response["map_state"]["hour_from"] == 16
+    assert response["map_state"]["hour_to"] == 18
+    assert response["data"][0]["event_count"] == 2
+
+
 def test_llm_can_call_whitelisted_mcp_tool_and_return_structured_response(db_path):
     calls = []
 
@@ -144,6 +189,50 @@ def test_llm_can_call_whitelisted_mcp_tool_and_return_structured_response(db_pat
     assert response["metric_source"] == "mcp:get_delay_hotspot_stops"
     assert response["ui"]["response_type"] == "ranked_list"
     assert response["data"][0]["stop_name"] == "Hauptbahnhof"
+
+
+def test_mcp_result_is_passed_to_answer_synthesizer(db_path):
+    synth_context = {}
+
+    def fake_classifier(question: str) -> dict:
+        return {
+            "tool": "mcp.delay_ranking",
+            "parameters": {"group_by": "date", "line_id": "6", "hour_from": 16, "hour_to": 18, "limit": 2},
+        }
+
+    def fake_mcp_tool_client(tool_name: str, arguments: dict) -> str:
+        return (
+            '[{"service_date":"2024-10-10","event_count":702,"total_stop_delay_minutes":1418.8,'
+            '"delayed_3min_events":137},'
+            '{"service_date":"2024-10-08","event_count":690,"total_stop_delay_minutes":1235.0,'
+            '"delayed_3min_events":122}]'
+        )
+
+    def fake_synthesizer(question: str, tool_name: str, params: dict, rows: list[dict]) -> dict:
+        synth_context["question"] = question
+        synth_context["tool_name"] = tool_name
+        synth_context["params"] = params
+        synth_context["rows"] = rows
+        return {
+            "title": "Bus line 6 delays",
+            "answer": f"Top MCP row is {rows[0]['service_date']} with {rows[0]['total_stop_delay_minutes']} stop-delay minutes.",
+            "bullets": [f"{row['service_date']}: {row['event_count']} events" for row in rows],
+        }
+
+    response = answer_transport_question_with_llm(
+        "Use MCP for line 6 delays between 4pm and 6pm",
+        db_path=db_path,
+        classify_tool=fake_classifier,
+        call_mcp_tool=fake_mcp_tool_client,
+        synthesize_answer=fake_synthesizer,
+    )
+
+    assert synth_context["tool_name"] == "delay_ranking"
+    assert synth_context["params"] == {"group_by": "date", "order": "highest", "limit": 2, "line_id": "6", "hour_from": 16, "hour_to": 18}
+    assert synth_context["rows"][0]["service_date"] == "2024-10-10"
+    assert response["answer"] == "Top MCP row is 2024-10-10 with 1418.8 stop-delay minutes."
+    assert response["bullets"] == ["2024-10-10: 702 events", "2024-10-08: 690 events"]
+    assert response["data"] == synth_context["rows"]
 
 
 def test_llm_cannot_call_readonly_sql_mcp_tool(db_path):

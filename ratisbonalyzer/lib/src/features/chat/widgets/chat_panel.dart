@@ -12,6 +12,7 @@ class ChatPanel extends StatefulWidget {
   const ChatPanel({super.key, this.onClose, this.height = 540});
 
   static const suggestedQuestions = [
+    'Show me all delays from bus line 6 between 4pm and 6pm',
     'Where should we intervene first on weekday mornings?',
     'Which segment creates the most delay toward the city center?',
     'Which stops expose passengers to the most delay after 16:00?',
@@ -227,8 +228,13 @@ class _AnswerCard extends StatelessWidget {
               ),
             ],
             if (response.bullets.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              ...response.bullets.map((bullet) => Text('• $bullet')),
+              const SizedBox(height: 12),
+              const Text(
+                'Top bullets:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              ...response.bullets.map((bullet) => Text('- $bullet')),
             ],
             const SizedBox(height: 8),
             Text(
