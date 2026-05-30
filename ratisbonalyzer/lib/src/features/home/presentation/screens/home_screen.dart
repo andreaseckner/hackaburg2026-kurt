@@ -381,15 +381,23 @@ class _HomeScreenState extends State<HomeScreen> {
     return _stops.where((s) => ids.contains(s.id)).toList();
   }
 
+  bool _isRouteSelected(String line) {
+    return _allRoutes.any((r) =>
+        _selectedRouteIds.contains(r.routeId) &&
+        (r.shortName == line || r.routeId == line));
+  }
+
   void _selectAllRoutes() {
     setState(() {
       _selectedRouteIds = _allRoutes.map((r) => r.routeId).toSet();
+      _updateActiveBuses();
     });
   }
 
   void _selectNoRoutes() {
     setState(() {
       _selectedRouteIds = {};
+      _updateActiveBuses();
     });
   }
 
@@ -400,6 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         _selectedRouteIds.add(routeId);
       }
+      _updateActiveBuses();
     });
   }
 
@@ -672,6 +681,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 _currentPlaybackTime!.isBefore(record.departureHalt)) ||
             _currentPlaybackTime!.isAtSameMomentAs(record.arrivalHalt) ||
             _currentPlaybackTime!.isAtSameMomentAs(record.departureHalt)) {
+          if (!_isRouteSelected(record.line)) {
+            return;
+          }
           final pos = _getStopPosition(record.stopName);
           if (pos != null) {
             double bearing = 0.0;
@@ -703,6 +715,9 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_currentPlaybackTime!.isAfter(record.departureHalt) &&
               _currentPlaybackTime!.isBefore(nextRecord.arrivalHalt)) {
             if (!_interpolateBuses) {
+              return;
+            }
+            if (!_isRouteSelected(record.line)) {
               return;
             }
 
@@ -853,6 +868,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (record.arrivalHalt.isAfter(fifteenMinutesAgo) &&
           (record.arrivalHalt.isBefore(_currentPlaybackTime!) ||
               record.arrivalHalt.isAtSameMomentAs(_currentPlaybackTime!))) {
+        if (!_isRouteSelected(record.line)) {
+          continue;
+        }
         final arrDev = record.scheduleDeviationArrival;
         final depDev = record.scheduleDeviationDeparture;
 

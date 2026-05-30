@@ -14,6 +14,7 @@ import csv
 import json
 import math
 import os
+import subprocess
 import sys
 import time
 from collections import defaultdict
@@ -24,10 +25,20 @@ except ImportError:
     print("Please install requests: pip install requests")
     sys.exit(1)
 
+# Resolve GTFS_DIR to scripts/ or assets/gtfs
 GTFS_DIR = os.path.dirname(os.path.abspath(__file__))
+if not os.path.exists(os.path.join(GTFS_DIR, "stops.txt")):
+    fallback_dir = os.path.abspath(os.path.join(GTFS_DIR, "..", "assets", "gtfs"))
+    if os.path.exists(os.path.join(fallback_dir, "stops.txt")):
+        GTFS_DIR = fallback_dir
+
 CACHE_FILE = os.path.join(GTFS_DIR, "segment_cache.json")
+
+# Routing configuration
+ROUTER = "valhalla"  # "valhalla" or "osrm". Use "valhalla" for bus routing
 OSRM_BASE = "http://router.project-osrm.org/route/v1/driving"
-REQUEST_DELAY = 0.5  # seconds between OSRM requests
+VALHALLA_BASE = "https://valhalla1.openstreetmap.de/route"
+REQUEST_DELAY = 0.5  # seconds between requests (respecting rate limits)
 
 
 # ---------------------------------------------------------------------------
@@ -128,32 +139,104 @@ def build_unique_shapes(trips, trip_stops):
 # OSRM querying
 # ---------------------------------------------------------------------------
 
+def decode_polyline(encoded, precision=6):
+    """Decode Valhalla's 6-decimal precision encoded polyline."""
+    factor = 10 ** precision
+    index, lat, lng = 0, 0, 0
+    coordinates = []
+    
+    while index < len(encoded):
+        b = 0
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if not (b >= 0x20):
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+        
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1f) << shift
+            shift += 5
+            if not (b >= 0x20):
+                break
+        dlng = ~(result >> 1) if (result & 1) else (result >> 1)
+        lng += dlng
+        
+        coordinates.append([lat / factor, lng / factor])
+        
+    return coordinates
+
+
 def fetch_segment_geometry(lat1, lon1, lat2, lon2):
-    """Query OSRM and return list of [lat, lon] coordinate pairs."""
+    """Query the selected router (Valhalla bus or OSRM driving) and return coordinate pairs."""
+    if ROUTER == "valhalla":
+        payload = {
+            "locations": [
+                {"lat": lat1, "lon": lon1},
+                {"lat": lat2, "lon": lon2}
+            ],
+            "costing": "bus"
+        }
+        try:
+            # Use subprocess and curl to bypass macOS Python TLS handshake failures (LibreSSL bugs)
+            cmd = [
+                "curl", "-s", "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "-d", json.dumps(payload),
+                VALHALLA_BASE
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                if data.get("status") == 0 and "trip" in data and data["trip"].get("legs"):
+                    shape_str = data["trip"]["legs"][0]["shape"]
+                    return decode_polyline(shape_str, precision=6)
+                elif "error" in data or "status_message" in data:
+                    print(f"  WARN: Valhalla error response: {data.get('status_message', data.get('error'))}")
+            else:
+                print(f"  WARN: Curl request failed with code {result.returncode}: {result.stderr}")
+        except Exception as e:
+            print(f"  WARN: Valhalla routing failed via curl ({e}), trying OSRM fallback...")
+            
+    # OSRM driving fallback
     url = f"{OSRM_BASE}/{lon1},{lat1};{lon2},{lat2}?geometries=geojson&overview=full"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("code") != "Ok" or not data.get("routes"):
-        # Fallback: straight line
-        return [[lat1, lon1], [lat2, lon2]]
-    coords = data["routes"][0]["geometry"]["coordinates"]  # [[lon, lat], ...]
-    return [[c[1], c[0]] for c in coords]  # convert to [lat, lon]
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") == "Ok" and data.get("routes"):
+            coords = data["routes"][0]["geometry"]["coordinates"]  # [[lon, lat], ...]
+            return [[c[1], c[0]] for c in coords]  # convert to [lat, lon]
+    except Exception as e:
+        print(f"  WARN: OSRM routing failed ({e}), using straight line fallback")
+        
+    return [[lat1, lon1], [lat2, lon2]]
 
 
 def fetch_all_segments(segments, stops, cache):
     """
     segments: set of (stop_a, stop_b) tuples
-    Fetches missing segments from OSRM, updates cache in-place.
+    Fetches missing segments from routing engine, updates cache in-place.
     """
     total = len(segments)
     to_fetch = [s for s in segments if segment_key(*s) not in cache]
-    print(f"Total unique segments: {total}, cached: {total - len(to_fetch)}, to fetch: {len(to_fetch)}")
+    len_to_fetch = len(to_fetch)
+    print(f"Total unique segments: {total}, cached: {total - len_to_fetch}, to fetch: {len_to_fetch}")
 
     for i, (sa, sb) in enumerate(to_fetch):
         lat1, lon1 = stops[sa]
         lat2, lon2 = stops[sb]
         key = segment_key(sa, sb)
+        print(f"[{i+1}/{len_to_fetch}] Routing {sa} -> {sb}...")
         try:
             coords = fetch_segment_geometry(lat1, lon1, lat2, lon2)
             cache[key] = coords
@@ -161,8 +244,8 @@ def fetch_all_segments(segments, stops, cache):
             print(f"  WARN: segment {sa}->{sb} failed ({e}), using straight line")
             cache[key] = [[lat1, lon1], [lat2, lon2]]
 
-        if (i + 1) % 50 == 0 or (i + 1) == len(to_fetch):
-            print(f"  Fetched {i + 1}/{len(to_fetch)} segments")
+        if (i + 1) % 10 == 0 or (i + 1) == len_to_fetch:
+            print(f"  Saved cache ({i + 1}/{len_to_fetch} segments fetched)")
             save_cache(cache)
 
         time.sleep(REQUEST_DELAY)
@@ -226,6 +309,7 @@ def write_updated_trips(trips, trip_shape_map):
 # ---------------------------------------------------------------------------
 
 def main():
+    print(f"Using router: {ROUTER} (Target directory: {GTFS_DIR})")
     print("Reading GTFS files...")
     stops = read_stops()
     trips = read_trips()
