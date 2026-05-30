@@ -30,7 +30,7 @@ class RvvRecordService {
     final metaBox = await Hive.openBox('rvv_records_meta');
     final dayStrings = metaBox.get('$filename:days') as List<dynamic>?;
     if (dayStrings == null) return [];
-    
+
     final days = dayStrings.map((s) => DateTime.parse(s.toString())).toList();
     days.sort();
     return days;
@@ -59,7 +59,7 @@ class RvvRecordService {
 
     // Save to Hive LazyBox
     final dataBox = await Hive.openLazyBox('rvv_records_data');
-    
+
     for (final entry in grouped.entries) {
       final key = '$filename:${entry.key}';
       await dataBox.put(key, entry.value);
