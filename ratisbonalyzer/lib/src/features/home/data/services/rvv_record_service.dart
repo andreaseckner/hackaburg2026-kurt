@@ -24,15 +24,25 @@ class RvvRecordService {
 
   /// Parses a single CSV asset file into a list of RvvRecord.
   Future<List<RvvRecord>> parseFile(String assetPath) async {
-    final data = await rootBundle.loadString(assetPath);
-    final rows = const CsvToListConverter().convert(
+    final rawData = await rootBundle.loadString(assetPath);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(
       data,
       shouldParseNumbers: false,
     );
 
     if (rows.length <= 1) return [];
 
-    // Skip header row
-    return rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)).toList();
+    // Skip header row and exclude any empty rows, parse with try-catch
+    final result = <RvvRecord>[];
+    for (final row in rows.skip(1)) {
+      if (row.isEmpty || row[0].toString().trim().isEmpty) continue;
+      try {
+        result.add(RvvRecord.fromCsvRow(row));
+      } catch (e) {
+        // Skip malformed row
+      }
+    }
+    return result;
   }
 }
