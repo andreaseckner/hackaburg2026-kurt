@@ -1,51 +1,107 @@
+import 'dart:isolate';
 import 'package:csv/csv.dart';
 import 'package:flutter/services.dart';
+import 'package:hive_ce/hive.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
 
 class RvvRecordService {
-  /// Loads all CSV files from assets/rec/ and returns a map of filename -> records.
-  Future<Map<String, List<RvvRecord>>> loadAllRecFiles() async {
+  /// Scans the AssetManifest and returns a list of CSV filenames in assets/rec/
+  Future<List<String>> listAllRecFiles() async {
     final assetManifest = await AssetManifest.loadFromAssetBundle(rootBundle);
     final recPaths = assetManifest
         .listAssets()
         .where((key) => key.startsWith('assets/rec/') && key.endsWith('.csv'))
         .toList();
 
-    final result = <String, List<RvvRecord>>{};
-
-    for (final path in recPaths) {
-      final filename = path.split('/').last;
-      final records = await parseFile(path);
-      result[filename] = records;
-    }
-
-    return result;
+    // Extract filenames and sort them
+    final filenames = recPaths.map((path) => path.split('/').last).toList();
+    filenames.sort();
+    return filenames;
   }
 
-  /// Parses a single CSV asset file into a list of RvvRecord.
-  Future<List<RvvRecord>> parseFile(String assetPath) async {
+  /// Checks if a file is already cached in Hive
+  Future<bool> isFileCached(String filename) async {
+    final metaBox = await Hive.openBox('rvv_records_meta');
+    return metaBox.get('$filename:cached', defaultValue: false) as bool;
+  }
+
+  /// Returns the unique operation days for a given file from Hive
+  Future<List<DateTime>> getDaysForFile(String filename) async {
+    final metaBox = await Hive.openBox('rvv_records_meta');
+    final dayStrings = metaBox.get('$filename:days') as List<dynamic>?;
+    if (dayStrings == null) return [];
+
+    final days = dayStrings.map((s) => DateTime.parse(s.toString())).toList();
+    days.sort();
+    return days;
+  }
+
+  /// Loads records for a specific file and day from the Hive lazy box
+  Future<List<RvvRecord>> getRecordsForDay(String filename, DateTime day) async {
+    final dataBox = await Hive.openLazyBox('rvv_records_data');
+    final key = '$filename:${day.toIso8601String()}';
+    final list = await dataBox.get(key);
+    if (list == null) return [];
+    return List<RvvRecord>.from(list);
+  }
+
+  /// Loads, parses, and caches the CSV file in a background Isolate
+  Future<void> cacheFile(String filename, String assetPath) async {
+    final metaBox = await Hive.openBox('rvv_records_meta');
+    final isCached = metaBox.get('$filename:cached', defaultValue: false) as bool;
+    if (isCached) return;
+
+    // Read the CSV data from assets
     final data = await rootBundle.loadString(assetPath);
-    final rows = const CsvToListConverter().convert(
-      data,
-      shouldParseNumbers: false,
-    );
 
-    if (rows.length <= 1) return [];
+    // Parse and group in Isolate
+    final grouped = await Isolate.run(() => _parseCsvAndGroup(data));
 
-    final header = rows[0];
-    final isLongFormat = header.length < 25;
+    // Save to Hive LazyBox
+    final dataBox = await Hive.openLazyBox('rvv_records_data');
 
-    if (isLongFormat) {
-      final records = <RvvRecord>[];
-      final dataRows = rows.skip(1).toList();
-      for (int i = 0; i < dataRows.length; i += 4) {
-        if (i + 4 > dataRows.length) break;
-        final chunk = dataRows.sublist(i, i + 4);
-        records.add(RvvRecord.fromCsvLongRows(chunk));
-      }
-      return records;
-    } else {
-      return rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)).toList();
+    for (final entry in grouped.entries) {
+      final key = '$filename:${entry.key}';
+      await dataBox.put(key, entry.value);
     }
+
+    // Save metadata
+    final dayStrings = grouped.keys.toList()..sort();
+    await metaBox.put('$filename:days', dayStrings);
+    await metaBox.put('$filename:cached', true);
   }
+}
+
+/// Helper function that runs in the background Isolate to parse and group CSV data.
+Map<String, List<RvvRecord>> _parseCsvAndGroup(String csvContent) {
+  final rows = const CsvToListConverter().convert(
+    csvContent,
+    shouldParseNumbers: false,
+  );
+
+  if (rows.length <= 1) return {};
+
+  final header = rows[0];
+  final isLongFormat = header.length < 25;
+
+  final records = <RvvRecord>[];
+
+  if (isLongFormat) {
+    final dataRows = rows.skip(1).toList();
+    for (int i = 0; i < dataRows.length; i += 4) {
+      if (i + 4 > dataRows.length) break;
+      final chunk = dataRows.sublist(i, i + 4);
+      records.add(RvvRecord.fromCsvLongRows(chunk));
+    }
+  } else {
+    records.addAll(rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)));
+  }
+
+  // Group by operation day string
+  final grouped = <String, List<RvvRecord>>{};
+  for (final rec in records) {
+    final dayKey = rec.operationDay.toIso8601String();
+    grouped.putIfAbsent(dayKey, () => []).add(rec);
+  }
+  return grouped;
 }

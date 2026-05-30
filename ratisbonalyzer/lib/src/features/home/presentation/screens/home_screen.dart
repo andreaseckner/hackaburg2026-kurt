@@ -109,9 +109,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _tofuTimer;
   Set<String> _selectedRouteIds = {};
 
-  Map<String, List<RvvRecord>> _recFiles = {};
+  List<String> _recFilesList = [];
   String? _selectedRecFile;
+  List<DateTime> _selectedFileDays = [];
   DateTime? _selectedDay;
+  List<RvvRecord> _selectedDayRecords = [];
   DateTime? _firstTimestamp;
   DateTime? _lastTimestamp;
 
@@ -124,6 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<_BusPlaybackState> _activeBuses = [];
   Map<String, Stop> _stopMapByName = {};
   Map<DateTime, WeatherRecord> _weatherRecords = {};
+  bool _isDatasetLoading = false;
 
   @override
   void initState() {
@@ -147,7 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _gtfsService.loadTrips(),
         _gtfsService.loadStopTimes(),
         _gtfsService.loadShapes(),
-        _rvvRecordService.loadAllRecFiles(),
+        _rvvRecordService.listAllRecFiles(),
         rootBundle.loadString(Assets.weather.weatherRegensburgAll),
       ]);
 
@@ -156,7 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final trips = results[2] as List<Trip>;
       final stopTimes = results[3] as List<StopTime>;
       final shapeMap = results[4] as Map<String, List<LatLng>>;
-      final recFiles = results[5] as Map<String, List<RvvRecord>>;
+      final recFilesList = results[5] as List<String>;
       final weatherCsv = results[6] as String;
       final weatherRecords = WeatherParser.parseWeather(weatherCsv);
 
@@ -287,28 +290,74 @@ class _HomeScreenState extends State<HomeScreen> {
         _stops = stops;
         _allRoutes = allRoutes;
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
-        _recFiles = recFiles;
+        _recFilesList = recFilesList;
         _weatherRecords = weatherRecords;
-        _selectedRecFile = recFiles.keys.isNotEmpty
-            ? recFiles.keys.first
+        _selectedRecFile = recFilesList.isNotEmpty
+            ? recFilesList.first
             : null;
-        _isLoading = false;
-
-        if (_selectedRecFile != null) {
-          final days = _getDaysForSelectedDataset();
-          if (days.isNotEmpty) {
-            _selectedDay = days.first;
-            _updateTimestamps();
-            _currentPlaybackTime = _firstTimestamp;
-            _pregroupBusTimelines();
-            _updateActiveBuses();
-          }
-        }
       });
+
+      if (_selectedRecFile != null) {
+        await _loadSelectedFileAndDay();
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       debugPrint('Error loading GTFS data: $e');
       if (mounted) {
         setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _loadSelectedFileAndDay() async {
+    final filename = _selectedRecFile;
+    if (filename == null) return;
+
+    setState(() {
+      _isDatasetLoading = true;
+    });
+
+    try {
+      await _rvvRecordService.cacheFile(filename, 'assets/rec/$filename');
+      final days = await _rvvRecordService.getDaysForFile(filename);
+
+      if (!mounted) return;
+
+      DateTime? targetDay;
+      if (days.isNotEmpty) {
+        targetDay = days.first;
+      }
+
+      List<RvvRecord> dayRecords = [];
+      if (targetDay != null) {
+        dayRecords = await _rvvRecordService.getRecordsForDay(filename, targetDay);
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _selectedFileDays = days;
+        _selectedDay = targetDay;
+        _selectedDayRecords = dayRecords;
+
+        _updateTimestamps();
+        _currentPlaybackTime = _firstTimestamp;
+        _pregroupBusTimelines();
+        _updateActiveBuses();
+
+        _isDatasetLoading = false;
+        _isLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Error loading dataset file $filename: $e');
+      if (mounted) {
+        setState(() {
+          _isDatasetLoading = false;
+          _isLoading = false;
+        });
       }
     }
   }
@@ -363,13 +412,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<DateTime> _getDaysForSelectedDataset() {
-    if (_selectedRecFile == null || !_recFiles.containsKey(_selectedRecFile)) {
-      return [];
-    }
-    final records = _recFiles[_selectedRecFile]!;
-    final days = records.map((r) => r.operationDay).toSet().toList();
-    days.sort();
-    return days;
+    return _selectedFileDays;
   }
 
   void _updateTimestamps() {
@@ -378,19 +421,16 @@ class _HomeScreenState extends State<HomeScreen> {
       _lastTimestamp = null;
       return;
     }
-    final records = _recFiles[_selectedRecFile]!;
-    final dayRecords = records
-        .where((r) => r.operationDay == _selectedDay)
-        .toList();
-    if (dayRecords.isEmpty) {
+    final records = _selectedDayRecords;
+    if (records.isEmpty) {
       _firstTimestamp = null;
       _lastTimestamp = null;
       return;
     }
 
-    DateTime minT = dayRecords.first.arrivalHalt;
-    DateTime maxT = dayRecords.first.departureHalt;
-    for (var r in dayRecords) {
+    DateTime minT = records.first.arrivalHalt;
+    DateTime maxT = records.first.departureHalt;
+    for (var r in records) {
       if (r.arrivalHalt.isBefore(minT)) minT = r.arrivalHalt;
       if (r.departureHalt.isAfter(maxT)) maxT = r.departureHalt;
     }
@@ -399,34 +439,47 @@ class _HomeScreenState extends State<HomeScreen> {
     _lastTimestamp = maxT;
   }
 
-  void _onRecFileChanged(String? newFile) {
+  Future<void> _onRecFileChanged(String? newFile) async {
     if (newFile == null) return;
     _pausePlayback();
     setState(() {
       _selectedRecFile = newFile;
-      final days = _getDaysForSelectedDataset();
-      if (days.isNotEmpty) {
-        _selectedDay = days.first;
-      } else {
-        _selectedDay = null;
-      }
-      _updateTimestamps();
-      _currentPlaybackTime = _firstTimestamp;
-      _pregroupBusTimelines();
-      _updateActiveBuses();
     });
+    await _loadSelectedFileAndDay();
   }
 
-  void _onDayChanged(DateTime? newDay) {
-    if (newDay == null) return;
+  Future<void> _onDayChanged(DateTime? newDay) async {
+    if (newDay == null || _selectedRecFile == null) return;
     _pausePlayback();
+
     setState(() {
-      _selectedDay = newDay;
-      _updateTimestamps();
-      _currentPlaybackTime = _firstTimestamp;
-      _pregroupBusTimelines();
-      _updateActiveBuses();
+      _isDatasetLoading = true;
     });
+
+    try {
+      final dayRecords = await _rvvRecordService.getRecordsForDay(_selectedRecFile!, newDay);
+
+      if (!mounted) return;
+
+      setState(() {
+        _selectedDay = newDay;
+        _selectedDayRecords = dayRecords;
+
+        _updateTimestamps();
+        _currentPlaybackTime = _firstTimestamp;
+        _pregroupBusTimelines();
+        _updateActiveBuses();
+
+        _isDatasetLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Error changing day: $e');
+      if (mounted) {
+        setState(() {
+          _isDatasetLoading = false;
+        });
+      }
+    }
   }
 
   void _pregroupBusTimelines() {
@@ -434,13 +487,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _busTimelines = {};
       return;
     }
-    final records = _recFiles[_selectedRecFile]!;
-    final dayRecords = records
-        .where((r) => r.operationDay == _selectedDay)
-        .toList();
+    final records = _selectedDayRecords;
 
     final timelines = <String, List<RvvRecord>>{};
-    for (var r in dayRecords) {
+    for (var r in records) {
       timelines.putIfAbsent(r.rotation, () => []).add(r);
     }
     for (var timeline in timelines.values) {
@@ -794,10 +844,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedDay == null) {
       return [];
     }
-    final records = _recFiles[_selectedRecFile]!;
-    final dayRecords = records
-        .where((r) => r.operationDay == _selectedDay)
-        .toList();
+    final dayRecords = _selectedDayRecords;
 
     final circles = <CircleMarker>[];
     final fifteenMinutesAgo = _currentPlaybackTime!.subtract(const Duration(minutes: 15));
@@ -1394,7 +1441,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-              if (!_isLoading && _recFiles.isNotEmpty)
+              if (!_isLoading && _recFilesList.isNotEmpty)
                 Positioned(
                   left: 16,
                   right: 140,
@@ -1457,7 +1504,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     icon: const Icon(Icons.arrow_drop_down),
                                     isDense: true,
                                     focusColor: Colors.transparent,
-                                    items: _recFiles.keys.map((filename) {
+                                    items: _recFilesList.map((filename) {
                                       return DropdownMenuItem<String>(
                                         value: filename,
                                         child: Text(
@@ -1709,6 +1756,43 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               if (_isLoading) const Center(child: CircularProgressIndicator()),
+              if (_isDatasetLoading)
+                Container(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  child: Center(
+                    child: Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      elevation: 8,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Optimizing & caching dataset...',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'This will only happen once per dataset.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
