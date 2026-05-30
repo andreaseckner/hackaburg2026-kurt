@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'package:csv/csv.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
@@ -55,8 +56,13 @@ class RvvRecordService {
     final rawData = await rootBundle.loadString(assetPath);
     final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
-    // Parse and group in Isolate
-    final grouped = await Isolate.run(() => _parseCsvAndGroup(data));
+    // Parse and group (use background Isolate if not on Web)
+    final Map<String, List<RvvRecord>> grouped;
+    if (kIsWeb) {
+      grouped = _parseCsvAndGroup(data);
+    } else {
+      grouped = await Isolate.run(() => _parseCsvAndGroup(data));
+    }
 
     // Save to Hive LazyBox
     final dataBox = await Hive.openLazyBox('rvv_records_data');
