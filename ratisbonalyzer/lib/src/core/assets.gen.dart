@@ -78,54 +78,6 @@ class $AssetsRecGen {
   String get a2605202407062024ITCSHochwasser =>
       'assets/rec/26.05.2024_07.06.2024_ITCS_Hochwasser.csv';
 
-  /// File path: assets/rec/SQ-S02 Linie 1 2024-09-01 bis 2024-09-30.csv
-  String get sQS02Linie120240901Bis20240930 =>
-      'assets/rec/SQ-S02 Linie 1 2024-09-01 bis 2024-09-30.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2024-10-01 bis 2024-10-31.csv
-  String get sQS02Linie120241001Bis20241031 =>
-      'assets/rec/SQ-S02 Linie 1 2024-10-01 bis 2024-10-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2024-11-01 bis 2024-11-30.csv
-  String get sQS02Linie120241101Bis20241130 =>
-      'assets/rec/SQ-S02 Linie 1 2024-11-01 bis 2024-11-30.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2024-12-01 bis 2024-12-31.csv
-  String get sQS02Linie120241201Bis20241231 =>
-      'assets/rec/SQ-S02 Linie 1 2024-12-01 bis 2024-12-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-01-01 bis 2025-01-31.csv
-  String get sQS02Linie120250101Bis20250131 =>
-      'assets/rec/SQ-S02 Linie 1 2025-01-01 bis 2025-01-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-02-01 bis 2025-02-28.csv
-  String get sQS02Linie120250201Bis20250228 =>
-      'assets/rec/SQ-S02 Linie 1 2025-02-01 bis 2025-02-28.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-03-01 bis 2025-03-31.csv
-  String get sQS02Linie120250301Bis20250331 =>
-      'assets/rec/SQ-S02 Linie 1 2025-03-01 bis 2025-03-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-04-01 bis 2025-04-30.csv
-  String get sQS02Linie120250401Bis20250430 =>
-      'assets/rec/SQ-S02 Linie 1 2025-04-01 bis 2025-04-30.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-05-01 bis 2025-05-31.csv
-  String get sQS02Linie120250501Bis20250531 =>
-      'assets/rec/SQ-S02 Linie 1 2025-05-01 bis 2025-05-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-06-01 bis 2025-06-30.csv
-  String get sQS02Linie120250601Bis20250630 =>
-      'assets/rec/SQ-S02 Linie 1 2025-06-01 bis 2025-06-30.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-07-01 bis 2025-07-31.csv
-  String get sQS02Linie120250701Bis20250731 =>
-      'assets/rec/SQ-S02 Linie 1 2025-07-01 bis 2025-07-31.csv';
-
-  /// File path: assets/rec/SQ-S02 Linie 1 2025-08-01 bis 2025-08-30.csv
-  String get sQS02Linie120250801Bis20250830 =>
-      'assets/rec/SQ-S02 Linie 1 2025-08-01 bis 2025-08-30.csv';
-
   /// List of all assets
   List<String> get values => [
     aGitkeep,
@@ -134,18 +86,6 @@ class $AssetsRecGen {
     a1512202425122024ITCSChristkindlmarkt2024,
     a2304202509052025ITCSNurUniLinien,
     a2605202407062024ITCSHochwasser,
-    sQS02Linie120240901Bis20240930,
-    sQS02Linie120241001Bis20241031,
-    sQS02Linie120241101Bis20241130,
-    sQS02Linie120241201Bis20241231,
-    sQS02Linie120250101Bis20250131,
-    sQS02Linie120250201Bis20250228,
-    sQS02Linie120250301Bis20250331,
-    sQS02Linie120250401Bis20250430,
-    sQS02Linie120250501Bis20250531,
-    sQS02Linie120250601Bis20250630,
-    sQS02Linie120250701Bis20250731,
-    sQS02Linie120250801Bis20250830,
   ];
 }
 
