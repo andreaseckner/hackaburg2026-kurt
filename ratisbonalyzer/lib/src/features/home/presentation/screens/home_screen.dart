@@ -98,6 +98,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showBusStops = true;
   bool _showBusLineLabels = true;
   bool _interpolateBuses = true;
+  bool _showHeatmap = true;
+  bool _showHeatmapDelays = true;
+  bool _showHeatmapEarly = true;
+  bool _showGlowEffect = true;
   bool _controlPanelExpanded = true;
   bool _chatPanelOpen = false;
   bool _chatButtonHovered = false;
@@ -783,6 +787,68 @@ class _HomeScreenState extends State<HomeScreen> {
     return Colors.red;
   }
 
+  List<CircleMarker> _getHeatmapCircles() {
+    if (!_showHeatmap ||
+        _currentPlaybackTime == null ||
+        _selectedRecFile == null ||
+        _selectedDay == null) {
+      return [];
+    }
+    final records = _recFiles[_selectedRecFile]!;
+    final dayRecords = records
+        .where((r) => r.operationDay == _selectedDay)
+        .toList();
+
+    final circles = <CircleMarker>[];
+    final fifteenMinutesAgo = _currentPlaybackTime!.subtract(const Duration(minutes: 15));
+
+    for (var record in dayRecords) {
+      if (record.arrivalHalt.isAfter(fifteenMinutesAgo) &&
+          (record.arrivalHalt.isBefore(_currentPlaybackTime!) ||
+              record.arrivalHalt.isAtSameMomentAs(_currentPlaybackTime!))) {
+        final arrDev = record.scheduleDeviationArrival;
+        final depDev = record.scheduleDeviationDeparture;
+
+        final lateSeconds = arrDev ?? 0;
+        final earlySeconds = depDev ?? 0;
+
+        if (lateSeconds > 30 && _showHeatmapDelays) {
+          final isBigger = lateSeconds > 180;
+          final pos = _getStopPosition(record.stopName);
+          if (pos != null) {
+            circles.add(
+              CircleMarker(
+                point: pos,
+                radius: isBigger ? 250.0 : 125.0,
+                useRadiusInMeter: true,
+                color: Colors.orange.shade700.withValues(alpha: 0.35),
+                borderColor: Colors.orange.shade700.withValues(alpha: 0.6),
+                borderStrokeWidth: 1.5,
+              ),
+            );
+          }
+        } else if (earlySeconds < -30 && _showHeatmapEarly) {
+          final absDev = earlySeconds.abs();
+          final isBigger = absDev > 180;
+          final pos = _getStopPosition(record.stopName);
+          if (pos != null) {
+            circles.add(
+              CircleMarker(
+                point: pos,
+                radius: isBigger ? 250.0 : 125.0,
+                useRadiusInMeter: true,
+                color: Colors.cyan.shade600.withValues(alpha: 0.35),
+                borderColor: Colors.cyan.shade600.withValues(alpha: 0.6),
+                borderStrokeWidth: 1.5,
+              ),
+            );
+          }
+        }
+      }
+    }
+    return circles;
+  }
+
   double get _playbackProgress {
     if (_currentPlaybackTime == null ||
         _firstTimestamp == null ||
@@ -873,6 +939,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     urlTemplate: _osmUrlTemplate,
                     userAgentPackageName: _userAgentPackage,
                   ),
+                  if (_showHeatmap)
+                    CircleLayer(circles: _getHeatmapCircles()),
                   if (_showBusLines)
                     PolylineLayer(polylines: _filteredPolylines),
                   if (_showBusLines &&
@@ -915,16 +983,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: 2.0,
                               ),
                               boxShadow: [
-                                BoxShadow(
-                                  color: delayColor.withValues(alpha: 0.95),
-                                  blurRadius: 8.0,
-                                  spreadRadius: 3.5,
-                                ),
-                                BoxShadow(
-                                  color: delayColor.withValues(alpha: 0.85),
-                                  blurRadius: 25.0,
-                                  spreadRadius: 10.0,
-                                ),
+                                if (_showGlowEffect) ...[
+                                  BoxShadow(
+                                    color: delayColor.withValues(alpha: 0.95),
+                                    blurRadius: 8.0,
+                                    spreadRadius: 3.5,
+                                  ),
+                                  BoxShadow(
+                                    color: delayColor.withValues(alpha: 0.85),
+                                    blurRadius: 25.0,
+                                    spreadRadius: 10.0,
+                                  ),
+                                ],
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.15),
                                   blurRadius: 2.0,
@@ -965,7 +1035,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(
-                            maxHeight: 400,
+                            maxHeight: 460,
                             maxWidth: 220,
                           ),
                           child: Padding(
@@ -1099,6 +1169,116 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ],
                                   ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.blur_on, size: 18),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Glow Effect',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _showGlowEffect,
+                                            onChanged: (v) {
+                                              setState(() {
+                                                _showGlowEffect = v;
+                                              });
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.map_outlined, size: 18),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        'Heatmap',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      const Spacer(),
+                                      SizedBox(
+                                        height: 28,
+                                        width: 44,
+                                        child: FittedBox(
+                                          child: Switch(
+                                            value: _showHeatmap,
+                                            onChanged: (v) {
+                                              setState(() {
+                                                _showHeatmap = v;
+                                              });
+                                            },
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (_showHeatmap) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 16.0, top: 4.0),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.circle, size: 12, color: Colors.orange),
+                                          const SizedBox(width: 8),
+                                          const Text(
+                                            'Show Delays',
+                                            style: TextStyle(fontSize: 12),
+                                          ),
+                                          const Spacer(),
+                                          SizedBox(
+                                            height: 24,
+                                            width: 36,
+                                            child: FittedBox(
+                                              child: Switch(
+                                                value: _showHeatmapDelays,
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    _showHeatmapDelays = v;
+                                                  });
+                                                },
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 16.0, top: 4.0),
+                                      child: Row(
+                                        children: [
+                                          const Icon(Icons.circle, size: 12, color: Colors.cyan),
+                                          const SizedBox(width: 8),
+                                          const Text(
+                                            'Show Early',
+                                            style: TextStyle(fontSize: 12),
+                                          ),
+                                          const Spacer(),
+                                          SizedBox(
+                                            height: 24,
+                                            width: 36,
+                                            child: FittedBox(
+                                              child: Switch(
+                                                value: _showHeatmapEarly,
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    _showHeatmapEarly = v;
+                                                  });
+                                                },
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                   const Divider(height: 16),
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
