@@ -32,7 +32,20 @@ class RvvRecordService {
 
     if (rows.length <= 1) return [];
 
-    // Skip header row
-    return rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)).toList();
+    final header = rows[0];
+    final isLongFormat = header.length < 25;
+
+    if (isLongFormat) {
+      final records = <RvvRecord>[];
+      final dataRows = rows.skip(1).toList();
+      for (int i = 0; i < dataRows.length; i += 4) {
+        if (i + 4 > dataRows.length) break;
+        final chunk = dataRows.sublist(i, i + 4);
+        records.add(RvvRecord.fromCsvLongRows(chunk));
+      }
+      return records;
+    } else {
+      return rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)).toList();
+    }
   }
 }
