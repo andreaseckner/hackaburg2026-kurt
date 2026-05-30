@@ -38,3 +38,4 @@ mcp-server/data/processed/*
 *.parquet
 *.xlsx
 *.zip
+rvv_analyzer/linux/runner/main.cc
