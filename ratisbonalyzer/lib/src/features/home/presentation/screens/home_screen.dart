@@ -85,6 +85,10 @@ class _HomeScreenState extends State<HomeScreen> {
   // UI Styling
   static const double _stopMarkerSize = 24.0;
 
+  // Delay & Early thresholds (in seconds)
+  static const int _minorDeviationLimit = 60;
+  static const int _severeDeviationLimit = 180;
+
   final GtfsService _gtfsService = GtfsService();
   final RvvRecordService _rvvRecordService = RvvRecordService();
   final MapController _mapController = MapController();
@@ -292,9 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _selectedRouteIds = allRoutes.map((r) => r.routeId).toSet();
         _recFilesList = recFilesList;
         _weatherRecords = weatherRecords;
-        _selectedRecFile = recFilesList.isNotEmpty
-            ? recFilesList.first
-            : null;
+        _selectedRecFile = recFilesList.isNotEmpty ? recFilesList.first : null;
       });
 
       if (_selectedRecFile != null) {
@@ -333,7 +335,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       List<RvvRecord> dayRecords = [];
       if (targetDay != null) {
-        dayRecords = await _rvvRecordService.getRecordsForDay(filename, targetDay);
+        dayRecords = await _rvvRecordService.getRecordsForDay(
+          filename,
+          targetDay,
+        );
       }
 
       if (!mounted) return;
@@ -457,7 +462,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      final dayRecords = await _rvvRecordService.getRecordsForDay(_selectedRecFile!, newDay);
+      final dayRecords = await _rvvRecordService.getRecordsForDay(
+        _selectedRecFile!,
+        newDay,
+      );
 
       if (!mounted) return;
 
@@ -832,8 +840,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Color _getDelayColor(int delaySeconds) {
-    if (delaySeconds <= 30) return Colors.green;
-    if (delaySeconds <= 180) return Colors.orange;
+    if (delaySeconds <= _minorDeviationLimit) return Colors.green;
+    if (delaySeconds <= _severeDeviationLimit) return Colors.orange;
     return Colors.red;
   }
 
@@ -848,12 +856,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final dayRecords = _selectedDayRecords;
 
     final circles = <CircleMarker>[];
-    final fifteenMinutesAgo = _currentPlaybackTime!.subtract(const Duration(minutes: 15));
+    final fifteenMinutesAgo = _currentPlaybackTime!.subtract(
+      const Duration(minutes: 15),
+    );
 
     for (var record in dayRecords) {
-      final isRouteSelected = _allRoutes.any((r) =>
-          (r.shortName == record.line || r.routeId == record.line) &&
-          _selectedRouteIds.contains(r.routeId));
+      final isRouteSelected = _allRoutes.any(
+        (r) =>
+            (r.shortName == record.line || r.routeId == record.line) &&
+            _selectedRouteIds.contains(r.routeId),
+      );
       if (!isRouteSelected) continue;
 
       if (record.arrivalHalt.isAfter(fifteenMinutesAgo) &&
@@ -865,8 +877,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final lateSeconds = arrDev ?? 0;
         final earlySeconds = depDev ?? 0;
 
-        if (lateSeconds > 30 && _showHeatmapDelays) {
-          final isBigger = lateSeconds > 180;
+        if (lateSeconds > _minorDeviationLimit && _showHeatmapDelays) {
+          final isBigger = lateSeconds > _severeDeviationLimit;
           final pos = _getStopPosition(record.stopName);
           if (pos != null) {
             circles.add(
@@ -880,9 +892,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             );
           }
-        } else if (earlySeconds < -30 && _showHeatmapEarly) {
+        } else if (earlySeconds < -_minorDeviationLimit && _showHeatmapEarly) {
           final absDev = earlySeconds.abs();
-          final isBigger = absDev > 180;
+          final isBigger = absDev > _severeDeviationLimit;
           final pos = _getStopPosition(record.stopName);
           if (pos != null) {
             circles.add(
@@ -920,10 +932,17 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_currentPlaybackTime == null || _weatherRecords.isEmpty) return null;
 
     // Convert playback time (German local) to UTC
-    final utcTime = TimezoneUtils.convertGermanLocalToUtc(_currentPlaybackTime!);
+    final utcTime = TimezoneUtils.convertGermanLocalToUtc(
+      _currentPlaybackTime!,
+    );
 
     // Find closest hourly weather record
-    final target = DateTime.utc(utcTime.year, utcTime.month, utcTime.day, utcTime.hour);
+    final target = DateTime.utc(
+      utcTime.year,
+      utcTime.month,
+      utcTime.day,
+      utcTime.hour,
+    );
     final direct = _weatherRecords[target];
     if (direct != null) return direct;
 
@@ -992,8 +1011,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     urlTemplate: _osmUrlTemplate,
                     userAgentPackageName: _userAgentPackage,
                   ),
-                  if (_showHeatmap)
-                    CircleLayer(circles: _getHeatmapCircles()),
+                  if (_showHeatmap) CircleLayer(circles: _getHeatmapCircles()),
                   if (_showBusLines)
                     PolylineLayer(polylines: _filteredPolylines),
                   if (_showBusLines &&
@@ -1017,71 +1035,86 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   // Live bus markers layer
                   MarkerLayer(
-                    markers: _activeBuses.where((bus) {
-                      return _allRoutes.any((r) =>
-                          (r.shortName == bus.line || r.routeId == bus.line) &&
-                          _selectedRouteIds.contains(r.routeId));
-                    }).map((bus) {
-                      final delayColor = _getDelayColor(bus.delaySeconds ?? 0);
-                      return Marker(
-                        point: bus.position,
-                        width: 32.0,
-                        height: 32.0,
-                        alignment: Alignment.center,
-                        child: Tooltip(
-                          message:
-                              'Line ${bus.line}\nUmlauf: ${bus.rotation}\nDelay: ${bus.delaySeconds != null ? "${(bus.delaySeconds! / 60).round()}m" : "N/A"}',
-                          child: Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: bus.color,
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 2.0,
-                              ),
-                              boxShadow: [
-                                if (_showGlowEffect) ...[
-                                  BoxShadow(
-                                    color: delayColor.withValues(alpha: 0.95),
-                                    blurRadius: 8.0,
-                                    spreadRadius: 3.5,
+                    markers: _activeBuses
+                        .where((bus) {
+                          return _allRoutes.any(
+                            (r) =>
+                                (r.shortName == bus.line ||
+                                    r.routeId == bus.line) &&
+                                _selectedRouteIds.contains(r.routeId),
+                          );
+                        })
+                        .map((bus) {
+                          final delayColor = _getDelayColor(
+                            bus.delaySeconds ?? 0,
+                          );
+                          return Marker(
+                            point: bus.position,
+                            width: 32.0,
+                            height: 32.0,
+                            alignment: Alignment.center,
+                            child: Tooltip(
+                              message:
+                                  'Line ${bus.line}\nUmlauf: ${bus.rotation}\nDelay: ${bus.delaySeconds != null ? "${(bus.delaySeconds! / 60).round()}m" : "N/A"}',
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: bus.color,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2.0,
                                   ),
-                                  BoxShadow(
-                                    color: delayColor.withValues(alpha: 0.85),
-                                    blurRadius: 25.0,
-                                    spreadRadius: 10.0,
-                                  ),
-                                ],
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.15),
-                                  blurRadius: 2.0,
-                                  offset: const Offset(0, 1),
+                                  boxShadow: [
+                                    if (_showGlowEffect) ...[
+                                      BoxShadow(
+                                        color: delayColor.withValues(
+                                          alpha: 0.95,
+                                        ),
+                                        blurRadius: 8.0,
+                                        spreadRadius: 3.5,
+                                      ),
+                                      BoxShadow(
+                                        color: delayColor.withValues(
+                                          alpha: 0.85,
+                                        ),
+                                        blurRadius: 25.0,
+                                        spreadRadius: 10.0,
+                                      ),
+                                    ],
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.15,
+                                      ),
+                                      blurRadius: 2.0,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            child: Center(
-                              child: Text(
-                                bus.line,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
+                                child: Center(
+                                  child: Text(
+                                    bus.line,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 10,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
+                          );
+                        })
+                        .toList(),
                   ),
                 ],
               ),
               if (!_isLoading && _weatherRecords.isNotEmpty)
-            Positioned(
-              top: 16,
-              right: 16,
-              child: _WeatherOverlay(weather: _currentWeather),
-            ),Positioned(
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: _WeatherOverlay(weather: _currentWeather),
+                ),
+              Positioned(
                 top: 16,
                 left: 16,
                 child: _controlPanelExpanded
@@ -1280,10 +1313,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   if (_showHeatmap) ...[
                                     Padding(
-                                      padding: const EdgeInsets.only(left: 16.0, top: 4.0),
+                                      padding: const EdgeInsets.only(
+                                        left: 16.0,
+                                        top: 4.0,
+                                      ),
                                       child: Row(
                                         children: [
-                                          const Icon(Icons.circle, size: 12, color: Colors.orange),
+                                          const Icon(
+                                            Icons.circle,
+                                            size: 12,
+                                            color: Colors.orange,
+                                          ),
                                           const SizedBox(width: 8),
                                           const Text(
                                             'Show Delays',
@@ -1308,10 +1348,17 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                     Padding(
-                                      padding: const EdgeInsets.only(left: 16.0, top: 4.0),
+                                      padding: const EdgeInsets.only(
+                                        left: 16.0,
+                                        top: 4.0,
+                                      ),
                                       child: Row(
                                         children: [
-                                          const Icon(Icons.circle, size: 12, color: Colors.cyan),
+                                          const Icon(
+                                            Icons.circle,
+                                            size: 12,
+                                            color: Colors.cyan,
+                                          ),
                                           const SizedBox(width: 8),
                                           const Text(
                                             'Show Early',
@@ -1776,7 +1823,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       elevation: 8,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 20,
+                        ),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
