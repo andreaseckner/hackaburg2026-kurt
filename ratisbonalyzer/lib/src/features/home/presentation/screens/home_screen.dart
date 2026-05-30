@@ -851,6 +851,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final fifteenMinutesAgo = _currentPlaybackTime!.subtract(const Duration(minutes: 15));
 
     for (var record in dayRecords) {
+      final isRouteSelected = _allRoutes.any((r) =>
+          (r.shortName == record.line || r.routeId == record.line) &&
+          _selectedRouteIds.contains(r.routeId));
+      if (!isRouteSelected) continue;
+
       if (record.arrivalHalt.isAfter(fifteenMinutesAgo) &&
           (record.arrivalHalt.isBefore(_currentPlaybackTime!) ||
               record.arrivalHalt.isAtSameMomentAs(_currentPlaybackTime!))) {
@@ -1012,7 +1017,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   // Live bus markers layer
                   MarkerLayer(
-                    markers: _activeBuses.map((bus) {
+                    markers: _activeBuses.where((bus) {
+                      return _allRoutes.any((r) =>
+                          (r.shortName == bus.line || r.routeId == bus.line) &&
+                          _selectedRouteIds.contains(r.routeId));
+                    }).map((bus) {
                       final delayColor = _getDelayColor(bus.delaySeconds ?? 0);
                       return Marker(
                         point: bus.position,
