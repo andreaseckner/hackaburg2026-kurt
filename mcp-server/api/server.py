@@ -59,9 +59,9 @@ def chat_query(request: ChatQueryRequest) -> dict[str, Any]:
 
     try:
         if request.use_llm:
-            response = answer_transport_question_with_llm(request.question)
+            response = answer_transport_question_with_llm(request.question, db_path=str(db_path))
         else:
-            response = answer_transport_question(request.question)
+            response = answer_transport_question(request.question, db_path=str(db_path))
             response["mode"] = "deterministic"
     except Exception:
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)

@@ -1,11 +1,26 @@
 # MCP Server
 
-Local stdio MCP server entrypoint:
+Local stdio MCP server entrypoint from the repository root:
+
+```bash
+./scripts/run-mcp-server.sh
+```
+
+Equivalent manual command from `mcp-server/`:
+
+```bash
+source .venv/bin/activate
+export TRANSPORT_DB_PATH="$PWD/data/processed/transport.duckdb"
+python -m mcp_server.server
+```
+
+Use `python -m mcp_server.server`, not `python mcp_server/server.py`. The module form keeps the repository root on Python's import path so imports like `core.analytics` work.
+
+Quick import smoke test:
 
 ```bash
 cd mcp-server
-source .venv/bin/activate
-python mcp_server/server.py
+.venv/bin/python -c "import mcp_server.server; print('MCP server imports OK')"
 ```
 
 Hermes config example:
@@ -13,13 +28,26 @@ Hermes config example:
 ```yaml
 mcp_servers:
   hackathon_2026_transport:
-    command: "/path/to/repo/mcp-server/.venv/bin/python"
-    args: ["/path/to/repo/mcp-server/mcp_server/server.py"]
+    command: "/path/to/repo/scripts/run-mcp-server.sh"
     env:
       TRANSPORT_DB_PATH: "/path/to/repo/mcp-server/data/processed/transport.duckdb"
     timeout: 120
     connect_timeout: 30
 ```
+
+For this checkout:
+
+```yaml
+mcp_servers:
+  hackathon_2026_transport:
+    command: "/Users/2an/Documents/Github/hackaburg2026-kurt/scripts/run-mcp-server.sh"
+    env:
+      TRANSPORT_DB_PATH: "/Users/2an/Documents/Github/hackaburg2026-kurt/mcp-server/data/processed/transport.duckdb"
+    timeout: 120
+    connect_timeout: 30
+```
+
+Restart Hermes after changing MCP config.
 
 Available analytics tools:
 
@@ -39,6 +67,7 @@ Available analytics tools:
 - `get_delay_growth_segments`
 - `explain_reliability_pain_points_for_day`
 - `answer_reliability_question`
+- `delay_ranking`
 - `query_readonly_sql`
 
 The first proper analytics are based on normalized departure delay semantics:

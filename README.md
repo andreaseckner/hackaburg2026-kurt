@@ -29,7 +29,7 @@ The project combines:
 
 ## Prerequisites
 
-- Flutter SDK with Dart matching the app constraints.
+- [FVM](https://fvm.app) for Flutter version management (`dart pub global activate fvm`).
 - Python 3.12+ for the MCP backend.
 - A running Ollama server if you want LLM-based chat routing.
 - Raw transport CSV files placed under `mcp-server/data/raw/` when rebuilding the database.
@@ -43,6 +43,7 @@ cd mcp-server
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 ```
 
 Rebuild the local DuckDB database from raw CSV files:
@@ -53,15 +54,16 @@ python scripts/inspect_csvs.py data/raw \
   && python scripts/create_views.py data/processed/transport.duckdb
 ```
 
-Start the backend API for the Flutter chat:
+Start the backend API for the Flutter chat from the repository root:
 
 ```bash
-LLM_PROVIDER=ollama \
-OLLAMA_BASE_URL=http://127.0.0.1:11434 \
-OLLAMA_MODEL=gemma4:26b-mlx \
-OLLAMA_TIMEOUT_SECONDS=180 \
-TRANSPORT_DB_PATH="$PWD/data/processed/transport.duckdb" \
-.venv/bin/python -m uvicorn api.server:app --host 127.0.0.1 --port 8123
+./scripts/run-backend.sh
+```
+
+Optional overrides:
+
+```bash
+PORT=8124 OLLAMA_MODEL=gemma4:26b-mlx ./scripts/run-backend.sh
 ```
 
 Health check:
@@ -70,7 +72,15 @@ Health check:
 curl http://127.0.0.1:8123/health
 ```
 
-For more backend details, see `mcp-server/README.md`.
+Start the stdio MCP server for MCP clients from the repository root:
+
+```bash
+./scripts/run-mcp-server.sh
+```
+
+Use `python -m mcp_server.server`, not `python mcp_server/server.py`, so Python can resolve the project packages correctly. The root script handles this for you. The backend API and the MCP server are separate entrypoints; run the API for Flutter chat and configure/run the MCP server for MCP clients.
+
+For more backend and MCP config details, see `mcp-server/README.md`.
 
 ## Flutter app quick start
 
@@ -78,12 +88,24 @@ In a second terminal, from the repository root:
 
 ```bash
 cd ratisbonalyzer
-flutter pub get
-flutter pub run build_runner build --delete-conflicting-outputs
-flutter run -d chrome
+fvm flutter pub get
+fvm flutter pub run build_runner build --delete-conflicting-outputs
+fvm flutter run -d chrome
 ```
 
-The `build_runner` step regenerates Flutter asset references after CSV/text/image assets change. If you use FVM locally, run the same commands as `fvm flutter ...` / `fvm dart ...`.
+The project uses [FVM](https://fvm.app) to pin the Flutter version. Install FVM first if needed:
+
+```bash
+dart pub global activate fvm
+```
+
+Then pin the version (once, per machine):
+
+```bash
+fvm use
+```
+
+The `build_runner` step regenerates Flutter asset references after CSV/text/image assets change.
 
 The chat button in the bottom-right corner calls the backend at:
 

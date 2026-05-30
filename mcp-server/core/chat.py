@@ -5,9 +5,11 @@ from typing import Any
 
 from .analytics import (
     get_corridor_pain_points_filtered,
+    get_delay_ranking,
     get_segment_delay_growth_hotspots_filtered,
     get_stop_delay_exposure_filtered,
     get_stop_delay_extremes,
+    get_stop_delays_for_line,
     get_trip_delay_summary,
 )
 from .chat_ui import fallback_ui, ranked_list_ui
@@ -44,6 +46,43 @@ def _extract_after_hour(question: str) -> int | None:
         hour += 12
     if 0 <= hour <= 23:
         return hour
+    return None
+
+
+def _parse_hour(raw_hour: str, meridiem: str | None = None) -> int | None:
+    hour = int(raw_hour)
+    meridiem = (meridiem or "").lower()
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    if 0 <= hour <= 23:
+        return hour
+    return None
+
+
+def _extract_hour_window(question: str) -> tuple[int | None, int | None, str | None]:
+    between_match = re.search(
+        r"\bbetween\s+(\d{1,2})(?:\s*(am|pm))?\s+(?:and|to|-)\s+(\d{1,2})(?:\s*(am|pm))?\b",
+        question,
+    )
+    if between_match:
+        start_hour = _parse_hour(between_match.group(1), between_match.group(2) or between_match.group(4))
+        end_hour = _parse_hour(between_match.group(3), between_match.group(4) or between_match.group(2))
+        if start_hour is not None and end_hour is not None:
+            return start_hour, end_hour, f"between {start_hour:02d}:00 and {end_hour:02d}:00"
+    if "rush hour" in question or "rushhour" in question or "peak hour" in question or "peak" in question:
+        return 7, 18, "rush hour"
+    after_hour = _extract_after_hour(question)
+    if after_hour is not None:
+        return after_hour, 23, f"after {after_hour:02d}:00"
+    return None, None, None
+
+
+def _extract_line_id(question: str) -> str | None:
+    match = re.search(r"\b(?:bus\s+)?line\s+(\d{1,4})\b", question)
+    if match:
+        return match.group(1)
     return None
 
 
@@ -274,6 +313,81 @@ def _answer_passenger_delay_exposure(db_path: str | None, hour_from: int = 16, h
     return response
 
 
+def _answer_line_delays(db_path: str | None, line_id: str, hour_from: int | None = None, hour_to: int | None = None, window_label: str | None = None, overall: bool = False) -> dict[str, Any]:
+    group_by = "overall" if overall else "date"
+    rows = get_delay_ranking(
+        db_path=db_path,
+        group_by=group_by,
+        line_id=line_id,
+        hour_from=hour_from,
+        hour_to=hour_to,
+        order="highest",
+        limit=10,
+    )
+    if not rows:
+        suffix = f" during {window_label}" if window_label else ""
+        return _unsupported_response(f"No delay data found for bus line {line_id}{suffix}.")
+    total_events = sum(row["event_count"] for row in rows)
+    total_minutes = round(sum(row["total_stop_delay_minutes"] for row in rows), 1)
+    top = rows[0]
+    timeframe = f" during {window_label}" if window_label else ""
+    if overall:
+        answer = (
+            f"Overall, bus line {line_id}{timeframe} accumulated {top['total_stop_delay_minutes']} stop-delay minutes "
+            f"across {top['event_count']} stop events on {top['service_days']} service days. "
+            f"{top['delayed_3min_events']} events were delayed 3+ minutes; {top['early_1min_events']} left more than 1 minute early."
+        )
+    else:
+        answer = (
+            f"For bus line {line_id}{timeframe}, the biggest delay day in the displayed results is {top['service_date']} "
+            f"with {top['total_stop_delay_minutes']} accumulated stop-delay minutes. "
+            f"The top {len(rows)} days shown contain {total_minutes} accumulated stop-delay minutes across {total_events} stop events."
+        )
+    response = _base_response(
+        intent="line_delay_summary",
+        title=f"Bus line {line_id}{timeframe} delays",
+        answer=answer,
+        metric_source=f"delay_ranking group_by={group_by} line_id={line_id} hour_from={hour_from} hour_to={hour_to}",
+        data=rows,
+        map_state={
+            "layer_type": "table",
+            "stops": [],
+            "segments": [],
+            "route_start": None,
+            "route_end": None,
+            "hour_from": hour_from,
+            "hour_to": hour_to,
+            "severity_metric": "total_stop_delay_minutes",
+        },
+    )
+    if overall:
+        response["bullets"] = [
+            f"Total stop-delay minutes: {top['total_stop_delay_minutes']}",
+            f"Stop events: {top['event_count']} across {top['service_days']} service days",
+            f"Delayed 3+ minutes: {top['delayed_3min_events']} events ({top['pct_delayed_3min']}%)",
+            f"Average positive delay: {top['avg_positive_delay_seconds']} seconds",
+            f"Early >1 minute: {top['early_1min_events']} events",
+        ]
+        label_key = "scope"
+        ui_title = f"Bus line {line_id}{timeframe} overall"
+    else:
+        response["bullets"] = [
+            f"{row['service_date']}: {row['total_stop_delay_minutes']} stop-delay minutes, {row['event_count']} stop events, {row['delayed_3min_events']} delayed 3+ min"
+            for row in rows
+        ]
+        label_key = "service_date"
+        ui_title = f"Bus line {line_id}{timeframe} delay days"
+    response["ui"] = ranked_list_ui(
+        title=ui_title,
+        rows=rows,
+        label_key=label_key,
+        metric_key="total_stop_delay_minutes",
+        metric_label="Stop-delay minutes",
+        metric_unit="min",
+    )
+    return response
+
+
 def _answer_trip_delay_for_date(db_path: str | None, service_date: str) -> dict[str, Any]:
     summary = get_trip_delay_summary(db_path=db_path, service_date=service_date)
     if summary.get("approx_trips", 0) == 0:
@@ -318,6 +432,49 @@ def _answer_trip_delay_for_date(db_path: str | None, service_date: str) -> dict[
     return response
 
 
+def _answer_stop_delays_for_line(db_path: str | None, line_id: str) -> dict[str, Any]:
+    rows = get_stop_delays_for_line(db_path=db_path, line_id=line_id, limit=10)
+    if not rows:
+        return _unsupported_response(f"No stop delay data found for bus line {line_id}.")
+    top = rows[0]
+    answer = (
+        f"On bus line {line_id}, the stop with the most delay is {top['stop_name']} "
+        f"with an average of {top['avg_positive_delay_seconds']} seconds delay per stop event "
+        f"({top['total_stop_delay_minutes']} total stop-delay minutes, "
+        f"{top['pct_delayed_3min']}% of events delayed 3+ minutes)."
+    )
+    response = _base_response(
+        intent="stop_delays_for_line",
+        title=f"Most delayed stops on line {line_id}",
+        answer=answer,
+        metric_source=f"stop_delays_for_line line_id={line_id}",
+        data=rows,
+        map_state={
+            "layer_type": "table",
+            "stops": [],
+            "segments": [],
+            "route_start": None,
+            "route_end": None,
+            "hour_from": None,
+            "hour_to": None,
+            "severity_metric": "avg_positive_delay_seconds",
+        },
+    )
+    response["bullets"] = [
+        f"{row['stop_name']}: {row['avg_positive_delay_seconds']}s avg delay, {row['pct_delayed_3min']}% delayed 3+ min"
+        for row in rows
+    ]
+    response["ui"] = ranked_list_ui(
+        title=f"Most delayed stops on line {line_id}",
+        rows=rows,
+        label_key="stop_name",
+        metric_key="avg_positive_delay_seconds",
+        metric_label="Avg delay",
+        metric_unit="sec",
+    )
+    return response
+
+
 def answer_transport_question(question: str, db_path: str | None = None) -> dict[str, Any]:
     q = _normalize_question(question)
     if not q:
@@ -325,6 +482,19 @@ def answer_transport_question(question: str, db_path: str | None = None) -> dict
     if "select " in q or ";" in q:
         return _unsupported_response("SQL input is not supported in the chat router.")
     service_date = _extract_service_date(q)
+    line_id = _extract_line_id(q)
+    hour_from, hour_to, window_label = _extract_hour_window(q)
+    if line_id and "delay" in q and ("station" in q or "stop" in q):
+        return _answer_stop_delays_for_line(db_path, line_id)
+    if line_id and "delay" in q:
+        return _answer_line_delays(
+            db_path,
+            line_id,
+            hour_from=hour_from,
+            hour_to=hour_to,
+            window_label=window_label,
+            overall="overall" in q,
+        )
     if service_date and "delay" in q:
         return _answer_trip_delay_for_date(db_path, service_date)
     if "intervene" in q and "weekday" in q and "morning" in q:

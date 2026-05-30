@@ -31,6 +31,7 @@ logger = logging.getLogger("uvicorn.error")
 
 ToolClassifier = Callable[[str], dict[str, Any]]
 McpToolCaller = Callable[[str, dict[str, Any]], str]
+AnswerSynthesizer = Callable[[str, str, dict[str, Any], list[dict[str, Any]]], dict[str, Any] | None]
 
 _ALLOWED_MCP_TOOLS = {
     "get_delay_by_weekday",
@@ -45,6 +46,9 @@ _ALLOWED_MCP_TOOLS = {
     "get_delay_growth_segments",
     "explain_reliability_pain_points_for_day",
     "delay_ranking",
+    "get_delay_event_attributes",
+    "get_delay_attribute_values",
+    "get_delay_event_records",
 }
 
 _ALLOWED_TOOLS = {
@@ -77,11 +81,20 @@ Allowed tools:
 - mcp.get_corridor_reliability_pain_points parameters: limit int
 - mcp.get_delay_growth_segments parameters: limit int, min_growth_1min_events int
 - mcp.explain_reliability_pain_points_for_day parameters: service_date YYYY-MM-DD
-- mcp.delay_ranking parameters: group_by "stop"|"weekday"|"hour"|"date"|"corridor"|"direction", date_from YYYY-MM-DD|null, date_to YYYY-MM-DD|null, weekday_only bool, hour_from int|null, hour_to int|null, stop_name string|null, direction string|null, order "highest"|"lowest", limit int
+- mcp.delay_ranking parameters: group_by "overall"|"stop"|"weekday"|"hour"|"date"|"corridor"|"direction", line_id string|null, date_from YYYY-MM-DD|null, date_to YYYY-MM-DD|null, weekday_only bool, hour_from int|null, hour_to int|null, stop_name string|null, direction string|null, order "highest"|"lowest", limit int
+- mcp.get_delay_event_attributes parameters: {{}}
+- mcp.get_delay_attribute_values parameters: attribute string, line_id string|null, stop_name string|null, weekday_name string|null, hour_from int|null, hour_to int|null, limit int
+- mcp.get_delay_event_records parameters: attributes list[string]|null, filters object|null, hour_from int|null, hour_to int|null, order_by string, order "highest"|"lowest", limit int
 - unsupported parameters: reason string
 Never choose mcp.query_readonly_sql.
 Never choose mcp.answer_reliability_question; use a specific analytics tool instead.
+For questions asking "all delays from bus line N" or "delays from line N", choose mcp.delay_ranking with group_by="date", line_id="N", order="highest".
+For questions asking "overall" delay for bus line N, choose mcp.delay_ranking with group_by="overall", line_id="N".
+For questions asking "rush hour" or "rushhour", include hour_from=7 and hour_to=18.
+For questions asking "between 4pm and 6pm" or similar, convert to 24-hour inclusive hour_from/hour_to, e.g. hour_from=16 and hour_to=18.
 For questions asking "how many delays" or "delays on" one day, choose mcp.delay_ranking with group_by="date", date_from=date_to=that day, order="highest".
+For generic exploratory questions where you need raw context rows rather than an aggregate, choose mcp.get_delay_event_records with only the attributes and filters needed.
+For questions asking what lines/stops/dates/hours exist, choose mcp.get_delay_attribute_values for that attribute.
 
 Question: {question}
 """.strip()
@@ -181,7 +194,7 @@ def _sanitize_choice(choice: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 def _sanitize_mcp_params(tool: str, raw_params: dict[str, Any]) -> dict[str, Any]:
     if tool not in _ALLOWED_MCP_TOOLS:
         raise ValueError(f"Unsupported MCP tool: {tool}")
-    if tool in {"get_delay_by_hour", "compare_route_directions"}:
+    if tool in {"get_delay_by_hour", "compare_route_directions", "get_delay_event_attributes"}:
         return {}
     if tool == "get_delay_by_weekday":
         order = str(raw_params.get("order") or "highest").strip().lower()
@@ -211,7 +224,7 @@ def _sanitize_mcp_params(tool: str, raw_params: dict[str, Any]) -> dict[str, Any
             raise ValueError("service_date must be YYYY-MM-DD")
         return {"service_date": service_date}
     if tool == "delay_ranking":
-        valid_group_by = {"stop", "weekday", "hour", "date", "corridor", "direction"}
+        valid_group_by = {"overall", "stop", "weekday", "hour", "date", "corridor", "direction"}
         gb = str(raw_params.get("group_by") or "stop").strip().lower()
         if gb not in valid_group_by:
             gb = "stop"
@@ -219,6 +232,9 @@ def _sanitize_mcp_params(tool: str, raw_params: dict[str, Any]) -> dict[str, Any
         if order not in {"lowest", "highest"}:
             order = "highest"
         params: dict[str, Any] = {"group_by": gb, "order": order, "limit": _as_limit(raw_params.get("limit"), 10)}
+        line_id = raw_params.get("line_id")
+        if line_id is not None and str(line_id).strip():
+            params["line_id"] = str(line_id).strip()[:20]
         for date_key in ("date_from", "date_to"):
             val = raw_params.get(date_key)
             if val and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(val)):
@@ -233,6 +249,91 @@ def _sanitize_mcp_params(tool: str, raw_params: dict[str, Any]) -> dict[str, Any
             val = raw_params.get(str_key)
             if val and isinstance(val, str) and val.strip():
                 params[str_key] = val.strip()[:100]
+        return params
+    if tool == "get_delay_attribute_values":
+        valid_attributes = {
+            "service_date",
+            "weekday_name",
+            "weekday_number",
+            "hour",
+            "planned_departure_hour",
+            "line_id",
+            "stop_name",
+            "stop_code",
+            "stop_point",
+            "departure_delay_seconds",
+            "departure_delay_minutes",
+            "positive_delay_minutes",
+            "direction_id",
+            "run_id",
+            "planned_departure",
+            "route_start",
+            "route_start_code",
+            "route_end",
+            "route_end_code",
+        }
+        attribute = str(raw_params.get("attribute") or "line_id").strip()
+        if attribute not in valid_attributes:
+            raise ValueError("Unsupported delay attribute")
+        params = {"attribute": attribute, "limit": _as_limit(raw_params.get("limit"), 50)}
+        for str_key in ("line_id", "stop_name", "weekday_name"):
+            val = raw_params.get(str_key)
+            if val is not None and str(val).strip():
+                params[str_key] = str(val).strip()[:100]
+        for hour_key in ("hour_from", "hour_to"):
+            h = _as_hour(raw_params.get(hour_key))
+            if h is not None:
+                params[hour_key] = h
+        return params
+    if tool == "get_delay_event_records":
+        valid_attributes = {
+            "service_date",
+            "weekday_name",
+            "weekday_number",
+            "hour",
+            "planned_departure_hour",
+            "line_id",
+            "stop_name",
+            "stop_code",
+            "stop_point",
+            "departure_delay_seconds",
+            "departure_delay_minutes",
+            "positive_delay_minutes",
+            "direction_id",
+            "run_id",
+            "planned_departure",
+            "route_start",
+            "route_start_code",
+            "route_end",
+            "route_end_code",
+        }
+        raw_attributes = raw_params.get("attributes")
+        attributes = [str(item).strip() for item in raw_attributes if str(item).strip()] if isinstance(raw_attributes, list) else []
+        invalid = [attribute for attribute in attributes if attribute not in valid_attributes]
+        if invalid:
+            raise ValueError(f"Unsupported delay attributes: {invalid}")
+        raw_filters = raw_params.get("filters") or {}
+        if not isinstance(raw_filters, dict):
+            raise ValueError("filters must be an object")
+        valid_filters = {"service_date", "weekday_name", "line_id", "stop_name", "route_start", "route_end", "direction_id"}
+        filters = {str(key): value for key, value in raw_filters.items() if key in valid_filters and value not in (None, "")}
+        order_by = str(raw_params.get("order_by") or "positive_delay_minutes").strip()
+        if order_by not in valid_attributes:
+            order_by = "positive_delay_minutes"
+        order = str(raw_params.get("order") or "highest").strip().lower()
+        if order not in {"lowest", "highest"}:
+            order = "highest"
+        params = {
+            "attributes": attributes or None,
+            "filters": filters or None,
+            "order_by": order_by,
+            "order": order,
+            "limit": _as_limit(raw_params.get("limit"), 25),
+        }
+        for hour_key in ("hour_from", "hour_to"):
+            h = _as_hour(raw_params.get(hour_key))
+            if h is not None:
+                params[hour_key] = h
         return params
     return {}
 
@@ -405,7 +506,117 @@ def _mcp_metric_key(rows: list[dict[str, Any]]) -> str:
     return next(iter(first.keys()))
 
 
-def _mcp_tool_answer(tool_name: str, params: dict[str, Any], caller: McpToolCaller) -> dict[str, Any]:
+def _synthesis_prompt(question: str, tool_name: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    context_json = json.dumps(rows[:10], ensure_ascii=False, indent=2)
+    params_json = json.dumps(params, ensure_ascii=False, sort_keys=True)
+    return f"""
+You are Kurt, a transport reliability assistant.
+Use ONLY the MCP tool result below as factual context. Do not invent dates, lines, stops, counts, or delays.
+Return exactly one JSON object and nothing else with this shape:
+{{"title":"short title","answer":"one concise paragraph grounded in the rows","bullets":["top fact 1","top fact 2"]}}
+
+User question: {question}
+MCP tool: {tool_name}
+MCP parameters: {params_json}
+MCP result rows:
+{context_json}
+""".strip()
+
+
+def _sanitize_synthesized_answer(raw: dict[str, Any], fallback_title: str, fallback_answer: str, fallback_bullets: list[str]) -> dict[str, Any]:
+    title = str(raw.get("title") or fallback_title).strip()[:120]
+    answer = str(raw.get("answer") or fallback_answer).strip()
+    raw_bullets = raw.get("bullets")
+    bullets = [str(item).strip() for item in raw_bullets if str(item).strip()] if isinstance(raw_bullets, list) else []
+    return {
+        "title": title or fallback_title,
+        "answer": answer or fallback_answer,
+        "bullets": bullets[:10] or fallback_bullets,
+    }
+
+
+def gemini_answer_synthesizer(question: str, tool_name: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not os.environ.get("GEMINI_API_KEY"):
+        logger.info("chat/llm synthesizer skipped reason=missing_gemini_api_key")
+        return None
+    try:
+        from google import genai  # type: ignore
+    except ImportError:
+        logger.info("chat/llm synthesizer skipped reason=google_genai_not_installed")
+        return None
+
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    client = genai.Client()
+    prompt = _synthesis_prompt(question, tool_name, params, rows)
+    try:
+        response = client.models.generate_content(model=model, contents=prompt)
+    except Exception:
+        logger.exception("chat/llm synthesizer failed model=%s", model)
+        return None
+    logger.info("chat/llm synthesizer response model=%s text_len=%s", model, len(response.text or ""))
+    return _extract_json(response.text or "{}")
+
+
+def ollama_answer_synthesizer(question: str, tool_name: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    model = os.environ.get("OLLAMA_MODEL") or os.environ.get("LOCAL_LLM_MODEL")
+    if not model:
+        logger.info("chat/ollama synthesizer skipped reason=missing_ollama_model")
+        return None
+
+    base_url = (os.environ.get("OLLAMA_BASE_URL") or os.environ.get("LOCAL_LLM_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+    timeout_seconds = float(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "120"))
+    payload = json.dumps(
+        {
+            "model": model,
+            "prompt": _synthesis_prompt(question, tool_name, params, rows),
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0.0, "num_predict": 2048},
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            response_json = json.loads(response.read().decode())
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        logger.exception("chat/ollama synthesizer failed base_url=%s model=%s", base_url, model)
+        return None
+
+    text = str(response_json.get("response") or "")
+    if not text.strip():
+        logger.warning("chat/ollama synthesizer empty_response base_url=%s model=%s", base_url, model)
+        return None
+    logger.info("chat/ollama synthesizer response base_url=%s model=%s text_len=%s", base_url, model, len(text))
+    return _extract_json(text or "{}")
+
+
+def default_answer_synthesizer(question: str, tool_name: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    provider = os.environ.get("LLM_PROVIDER", "auto").strip().lower()
+    if provider == "gemini":
+        return gemini_answer_synthesizer(question, tool_name, params, rows)
+    if provider in {"ollama", "local", "local_llm"}:
+        return ollama_answer_synthesizer(question, tool_name, params, rows)
+    if provider not in {"", "auto"}:
+        logger.info("chat/synthesizer unknown_llm_provider=%s using=auto", provider)
+
+    synthesized = gemini_answer_synthesizer(question, tool_name, params, rows)
+    if synthesized is not None:
+        return synthesized
+    return ollama_answer_synthesizer(question, tool_name, params, rows)
+
+def _mcp_tool_answer(
+    question: str,
+    tool_name: str,
+    params: dict[str, Any],
+    caller: McpToolCaller,
+    synthesize_answer: AnswerSynthesizer | None = None,
+) -> dict[str, Any]:
     result_text = caller(tool_name, params)
     parsed = json.loads(result_text) if result_text.strip() else []
     rows = parsed if isinstance(parsed, list) else [parsed]
@@ -417,6 +628,18 @@ def _mcp_tool_answer(tool_name: str, params: dict[str, Any], caller: McpToolCall
     top = rows[0]
     title = tool_name.replace("_", " ").title()
     answer = f"MCP tool {tool_name} returned {len(rows)} result(s). Top result: {top.get(label_key)}."
+    bullets = [f"{row.get(label_key)}: {row.get(metric_key)}" for row in rows[:5]]
+    if synthesize_answer is not None:
+        try:
+            synthesized = synthesize_answer(question, tool_name, params, rows)
+        except Exception:
+            logger.exception("chat/router answer_synthesis_failed tool=%s params=%s", tool_name, params)
+            synthesized = None
+        if synthesized is not None:
+            payload = _sanitize_synthesized_answer(synthesized, title, answer, bullets)
+            title = payload["title"]
+            answer = payload["answer"]
+            bullets = payload["bullets"]
     return {
         "mode": "llm_mcp_tool_router",
         "intent": tool_name,
@@ -424,7 +647,7 @@ def _mcp_tool_answer(tool_name: str, params: dict[str, Any], caller: McpToolCall
         "confidence": 1.0,
         "title": title,
         "answer": answer,
-        "bullets": [f"{row.get(label_key)}: {row.get(metric_key)}" for row in rows[:5]],
+        "bullets": bullets,
         "metric_source": f"mcp:{tool_name}",
         "data": rows,
         "map_state": {
@@ -542,6 +765,7 @@ def answer_transport_question_with_llm(
     db_path: str | None = None,
     classify_tool: ToolClassifier | None = None,
     call_mcp_tool: McpToolCaller | None = None,
+    synthesize_answer: AnswerSynthesizer | None = None,
 ) -> dict[str, Any]:
     deterministic = answer_transport_question(question, db_path)
     if deterministic["intent"] != "unsupported":
@@ -574,7 +798,9 @@ def answer_transport_question_with_llm(
         mcp_tool = tool.removeprefix("mcp.")
         logger.info("chat/router call_mcp_tool tool=%s params=%s", mcp_tool, params)
         try:
-            return _mcp_tool_answer(mcp_tool, params, call_mcp_tool or call_local_mcp_tool)
+            caller = call_mcp_tool or call_local_mcp_tool
+            synthesizer = synthesize_answer if synthesize_answer is not None else (default_answer_synthesizer if call_mcp_tool is None else None)
+            return _mcp_tool_answer(question, mcp_tool, params, caller, synthesizer)
         except (RuntimeError, json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.exception("chat/router mcp_tool_failed tool=%s params=%s", mcp_tool, params)
             return _unsupported_response(f"MCP tool call failed: {exc}")

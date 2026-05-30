@@ -12,6 +12,8 @@ from core.analytics import (
     get_corridor_pain_points,
     get_corridor_pain_points_filtered,
     get_days_with_most_delays,
+    get_delay_attribute_values,
+    get_delay_event_records,
     get_delay_ranking,
     get_delays_by_hour,
     get_delays_by_weekday,
@@ -278,6 +280,43 @@ def test_readonly_sql_disables_external_file_access(db_path):
 # get_delay_ranking tests
 # ---------------------------------------------------------------------------
 
+
+def test_delay_attribute_values_lists_lines_with_counts(db_path):
+    rows = get_delay_attribute_values("line_id", db_path=db_path)
+
+    assert rows == [{"value": "1", "event_count": 10}]
+
+
+def test_delay_event_records_selects_attributes_and_filters(db_path):
+    rows = get_delay_event_records(
+        attributes=["service_date", "line_id", "stop_name", "departure_delay_minutes"],
+        filters={"line_id": "1", "stop_name": "Middle"},
+        order_by="departure_delay_minutes",
+        limit=2,
+        db_path=db_path,
+    )
+
+    assert rows == [
+        {
+            "service_date": "2024-12-12",
+            "line_id": "1",
+            "stop_name": "Middle",
+            "departure_delay_minutes": 4.0,
+        },
+        {
+            "service_date": "2024-12-12",
+            "line_id": "1",
+            "stop_name": "Middle",
+            "departure_delay_minutes": 2.0,
+        },
+    ]
+
+
+def test_delay_event_records_rejects_unsupported_attributes(db_path):
+    with pytest.raises(ValueError):
+        get_delay_event_records(attributes=["secret"], db_path=db_path)
+
+
 def test_delay_ranking_by_stop_highest(db_path):
     rows = get_delay_ranking(group_by="stop", order="highest", limit=2, db_path=db_path)
     assert len(rows) == 2
@@ -313,6 +352,21 @@ def test_delay_ranking_weekday_only(db_path):
 def test_delay_ranking_hour_filter(db_path):
     rows = get_delay_ranking(group_by="stop", hour_from=8, hour_to=9, db_path=db_path)
     assert len(rows) >= 1
+
+
+def test_delay_ranking_line_filter(db_path):
+    rows = get_delay_ranking(group_by="date", line_id=1, limit=5, db_path=db_path)
+    assert len(rows) == 2
+    assert {str(row["service_date"]) for row in rows} == {"2024-12-12", "2024-12-13"}
+    assert sum(row["event_count"] for row in rows) == 10
+
+
+def test_delay_ranking_overall_line_and_hour_filter(db_path):
+    rows = get_delay_ranking(group_by="overall", line_id=1, hour_from=8, hour_to=9, db_path=db_path)
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "overall"
+    assert rows[0]["event_count"] == 6
+    assert rows[0]["service_days"] == 1
 
 
 def test_delay_ranking_by_corridor(db_path):
