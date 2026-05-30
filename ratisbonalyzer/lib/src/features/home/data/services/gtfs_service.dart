@@ -6,8 +6,9 @@ import 'package:ratisbonalyzer/src/features/home/domain/models/gtfs_models.dart'
 
 class GtfsService {
   Future<List<Stop>> loadStops() async {
-    final data = await rootBundle.loadString(Assets.gtfs.stops);
-    final rows = const CsvToListConverter().convert(data, shouldParseNumbers: false);
+    final rawData = await rootBundle.loadString(Assets.gtfs.stops);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(data, shouldParseNumbers: false);
     
     // Find column indices
     final header = rows.first.map((e) => e.toString().trim()).toList();
@@ -16,7 +17,7 @@ class GtfsService {
     final latIdx = header.indexOf('stop_lat');
     final lonIdx = header.indexOf('stop_lon');
 
-    return rows.skip(1).map((row) {
+    return rows.skip(1).where((row) => row.length > idIdx && row.length > nameIdx && row.length > latIdx && row.length > lonIdx).map((row) {
       return Stop(
         id: row[idIdx].toString(),
         name: row[nameIdx].toString(),
@@ -29,8 +30,9 @@ class GtfsService {
   }
 
   Future<List<RouteInfo>> loadRoutes() async {
-    final data = await rootBundle.loadString(Assets.gtfs.routes);
-    final rows = const CsvToListConverter().convert(data, shouldParseNumbers: false);
+    final rawData = await rootBundle.loadString(Assets.gtfs.routes);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(data, shouldParseNumbers: false);
     
     final header = rows.first.map((e) => e.toString().trim()).toList();
     final idIdx = header.indexOf('route_id');
@@ -38,27 +40,28 @@ class GtfsService {
     final longNameIdx = header.indexOf('route_long_name');
     final colorIdx = header.indexOf('route_color');
 
-    return rows.skip(1).map((row) {
+    return rows.skip(1).where((row) => row.length > idIdx && row.length > shortNameIdx && row.length > longNameIdx).map((row) {
       return RouteInfo(
         id: row[idIdx].toString(),
         shortName: row[shortNameIdx].toString(),
         longName: row[longNameIdx].toString(),
-        color: colorIdx != -1 ? row[colorIdx].toString() : null,
+        color: (colorIdx != -1 && row.length > colorIdx) ? row[colorIdx].toString() : null,
       );
     }).toList();
   }
 
   Future<List<Trip>> loadTrips() async {
-    final data = await rootBundle.loadString(Assets.gtfs.trips);
-    final rows = const CsvToListConverter().convert(data, shouldParseNumbers: false);
+    final rawData = await rootBundle.loadString(Assets.gtfs.trips);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(data, shouldParseNumbers: false);
     
     final header = rows.first.map((e) => e.toString().trim()).toList();
     final idIdx = header.indexOf('trip_id');
     final routeIdIdx = header.indexOf('route_id');
     final shapeIdIdx = header.indexOf('shape_id');
 
-    return rows.skip(1).map((row) {
-      final shapeId = shapeIdIdx != -1 ? row[shapeIdIdx].toString().trim() : null;
+    return rows.skip(1).where((row) => row.length > idIdx && row.length > routeIdIdx).map((row) {
+      final shapeId = (shapeIdIdx != -1 && row.length > shapeIdIdx) ? row[shapeIdIdx].toString().trim() : null;
       return Trip(
         id: row[idIdx].toString(),
         routeId: row[routeIdIdx].toString(),
@@ -69,8 +72,9 @@ class GtfsService {
 
   /// Loads shapes.txt and returns a map of shapeId -> list of LatLng points (sorted by sequence).
   Future<Map<String, List<LatLng>>> loadShapes() async {
-    final data = await rootBundle.loadString(Assets.gtfs.shapes);
-    final rows = const CsvToListConverter().convert(data, shouldParseNumbers: false);
+    final rawData = await rootBundle.loadString(Assets.gtfs.shapes);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(data, shouldParseNumbers: false);
 
     final header = rows.first.map((e) => e.toString().trim()).toList();
     final shapeIdIdx = header.indexOf('shape_id');
@@ -81,6 +85,9 @@ class GtfsService {
     final result = <String, List<_ShapePoint>>{};
 
     for (final row in rows.skip(1)) {
+      if (row.length <= shapeIdIdx || row.length <= latIdx || row.length <= lonIdx || row.length <= seqIdx) {
+        continue;
+      }
       final shapeId = row[shapeIdIdx].toString().trim();
       final lat = double.parse(row[latIdx].toString().trim());
       final lon = double.parse(row[lonIdx].toString().trim());
@@ -95,15 +102,16 @@ class GtfsService {
   }
 
   Future<List<StopTime>> loadStopTimes() async {
-    final data = await rootBundle.loadString(Assets.gtfs.stopTimes);
-    final rows = const CsvToListConverter().convert(data, shouldParseNumbers: false);
+    final rawData = await rootBundle.loadString(Assets.gtfs.stopTimes);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rows = const CsvToListConverter(eol: '\n').convert(data, shouldParseNumbers: false);
     
     final header = rows.first.map((e) => e.toString().trim()).toList();
     final tripIdIdx = header.indexOf('trip_id');
     final stopIdIdx = header.indexOf('stop_id');
     final sequenceIdx = header.indexOf('stop_sequence');
 
-    return rows.skip(1).map((row) {
+    return rows.skip(1).where((row) => row.length > tripIdIdx && row.length > stopIdIdx && row.length > sequenceIdx).map((row) {
       return StopTime(
         tripId: row[tripIdIdx].toString(),
         stopId: row[stopIdIdx].toString(),

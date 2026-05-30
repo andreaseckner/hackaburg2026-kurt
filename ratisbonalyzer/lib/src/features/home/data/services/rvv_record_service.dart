@@ -1,5 +1,6 @@
 import 'dart:isolate';
 import 'package:csv/csv.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:ratisbonalyzer/src/features/home/domain/models/rvv_record.dart';
@@ -52,10 +53,16 @@ class RvvRecordService {
     if (isCached) return;
 
     // Read the CSV data from assets
-    final data = await rootBundle.loadString(assetPath);
+    final rawData = await rootBundle.loadString(assetPath);
+    final data = rawData.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
 
-    // Parse and group in Isolate
-    final grouped = await Isolate.run(() => _parseCsvAndGroup(data));
+    // Parse and group (use background Isolate if not on Web)
+    final Map<String, List<RvvRecord>> grouped;
+    if (kIsWeb) {
+      grouped = _parseCsvAndGroup(data);
+    } else {
+      grouped = await Isolate.run(() => _parseCsvAndGroup(data));
+    }
 
     // Save to Hive LazyBox
     final dataBox = await Hive.openLazyBox('rvv_records_data');
@@ -74,7 +81,7 @@ class RvvRecordService {
 
 /// Helper function that runs in the background Isolate to parse and group CSV data.
 Map<String, List<RvvRecord>> _parseCsvAndGroup(String csvContent) {
-  final rows = const CsvToListConverter().convert(
+  final rows = const CsvToListConverter(eol: '\n').convert(
     csvContent,
     shouldParseNumbers: false,
   );
@@ -87,14 +94,28 @@ Map<String, List<RvvRecord>> _parseCsvAndGroup(String csvContent) {
   final records = <RvvRecord>[];
 
   if (isLongFormat) {
-    final dataRows = rows.skip(1).toList();
+    final dataRows = rows
+        .skip(1)
+        .where((row) => row.isNotEmpty && row[0].toString().trim().isNotEmpty)
+        .toList();
     for (int i = 0; i < dataRows.length; i += 4) {
       if (i + 4 > dataRows.length) break;
       final chunk = dataRows.sublist(i, i + 4);
-      records.add(RvvRecord.fromCsvLongRows(chunk));
+      try {
+        records.add(RvvRecord.fromCsvLongRows(chunk));
+      } catch (e) {
+        // Skip malformed row
+      }
     }
   } else {
-    records.addAll(rows.skip(1).map((row) => RvvRecord.fromCsvRow(row)));
+    for (final row in rows.skip(1)) {
+      if (row.isEmpty || row[0].toString().trim().isEmpty) continue;
+      try {
+        records.add(RvvRecord.fromCsvRow(row));
+      } catch (e) {
+        // Skip malformed row
+      }
+    }
   }
 
   // Group by operation day string

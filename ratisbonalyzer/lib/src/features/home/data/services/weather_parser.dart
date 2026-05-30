@@ -3,8 +3,9 @@ import 'package:ratisbonalyzer/src/features/home/domain/models/weather_record.da
 
 class WeatherParser {
   static Map<DateTime, WeatherRecord> parseWeather(String csvContent) {
+    final data = csvContent.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final rows = const CsvToListConverter(eol: '\n').convert(
-      csvContent,
+      data,
       shouldParseNumbers: false,
     );
 
