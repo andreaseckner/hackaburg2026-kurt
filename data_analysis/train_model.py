@@ -56,7 +56,7 @@ def evaluate(model, x, y):
 
 
 def xgboost(x_train, y_train, x_val, y_val):
-    for depth in [20, 25, 30, 35]:
+    for depth in [10, 25, 30, 35]:
         temp_model = RandomForestRegressor(max_depth=depth,
                                            random_state=67,
                                            n_jobs=-1,

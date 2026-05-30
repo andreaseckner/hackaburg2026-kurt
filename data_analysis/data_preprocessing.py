@@ -10,7 +10,8 @@ def load_and_clean(filepath):
         "Unnamed: 14": "bus_stop"
     })
 
-    df = df.drop(columns=["Unnamed: 17"], errors="ignore")
+    df = df.drop(columns=["Unnamed: 17"],
+                 errors="ignore")  # Too many missing values and couldn't find what these columns mean
     df = df.drop(columns=["Unnamed: 19"], errors="ignore")
 
     time_cols = [

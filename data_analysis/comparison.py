@@ -1,6 +1,8 @@
 from data_preprocessing import load_and_clean
-from feature_engineering import create_features
+from feature_engineering import create_features, find_nearby_bus
 from plots import *
+
+""" Compare the data during UTH semester start and University semester start """
 
 DATASETS = {
     "2024": {
@@ -69,9 +71,3 @@ for year in ["2023", "2024"]:
 
     find_rush_time(data[year]["oth"])
     find_rush_time(data[year]["uni"])
-
-"""
-df_full = find_the_bus(df2024)
-visualise_nearby_distribution(df2024)
-visualise_delay_vs_nearby(df2024)
-visualise_line_congestion_effect(df2024)"""

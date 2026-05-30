@@ -6,14 +6,12 @@ import pandas as pd
 from utils import get_time_period
 
 
-def create_features(df):
+def create_features(df):  # Find additional information in the data
     df = df.copy()
-
     df = df.sort_values(["Umlauf", "Ankunft Haltestelle (Halt)"])
 
     df["weekday"] = df["Ankunft Haltestelle (Tür)"].dt.day_name()
     df["hour"] = df["Ankunft Haltestelle (Tür)"].dt.hour
-
     df["time_period"] = df["hour"].apply(get_time_period)
 
     df["arrival_delay"] = (
@@ -28,7 +26,8 @@ def create_features(df):
     )
 
     df["delay"] = df[["arrival_delay", "departure_delay"]].max(axis=1)
-    df = df[df["delay"].between(-30, 30)]
+    df = df[df["delay"].between(-30,
+                                30)]  # if bus doesn't arrive at the bus stop within 1 hour interval, it's either skipped or has been cancelled
     df = df.dropna(subset=["delay"])
 
     df["weekday"] = df["Ankunft Haltestelle (Tür)"].dt.day_name()
@@ -42,7 +41,7 @@ def create_features(df):
     return df
 
 
-def combine_datasets(bus_df, weather_df):
+def combine_datasets(bus_df, weather_df): # to combine any data with weather dataset
     weather_df["time"] = pd.to_datetime(weather_df["time"])
     bus_df = bus_df.sort_values("Ankunft Haltestelle (Tür)")
     weather_df = weather_df.sort_values("time")
@@ -57,7 +56,7 @@ def combine_datasets(bus_df, weather_df):
     return df
 
 
-def find_the_bus(data):
+def find_nearby_bus(data): # count the buses that share a bus stop within a certain time window
     data = data.copy()
 
     data["Ankunft PLAN (Haltestelle)"] = pd.to_datetime(
@@ -86,7 +85,7 @@ def find_the_bus(data):
     return data
 
 
-def find_the_bus_with_links(data, window_minutes=1):
+def find_the_bus_with_links(data, window_minutes=1): # discover the relation between a bus that causes delay to other buses
     data = data.copy()
 
     data["Ankunft PLAN (Haltestelle)"] = pd.to_datetime(
@@ -159,4 +158,3 @@ def find_the_bus_with_links(data, window_minutes=1):
     df["net_influence"] = df["causes_others"] - df["affected_by_others"]
 
     return df
-

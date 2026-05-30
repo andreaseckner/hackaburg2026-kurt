@@ -2,7 +2,7 @@ import matplotlib as plt
 import seaborn as sns
 
 
-def line_stops(df, line):
+def line_stops(df, line): # find the list of stops for the line
     stops = (
         df[df["Linie"].astype(str) == line]
         .sort_values("Ankunft Haltestelle (Halt)")
@@ -15,7 +15,7 @@ def line_stops(df, line):
     return stops
 
 
-def stop_lines(df, stop):
+def stop_lines(df, stop): # find the list of lines that contain the stop
     lines = (
         df[df["Haltestelle"].astype(str) == stop]["Linie"]
         .dropna()
@@ -26,7 +26,7 @@ def stop_lines(df, stop):
     return lines
 
 
-def bottleneck_check(df):
+def bottleneck_check(df): # discover, if delays cause bottlenecks and delays for the route stack over time
     df = df.sort_values(["Linie", "Richtung", "Haltestelle"])
     df["dist_m"] = df["CUMSUM(Distanz PLAN) {m}"]
     df["time_s"] = df["CUMSUM(Fahrzeit IST) {s}"]
@@ -58,7 +58,7 @@ def bottleneck_check(df):
     plt.show()
 
 
-def get_time_period(hour):
+def get_time_period(hour): # generalize hours of the day
     if 5 <= hour < 12:
         return "morning"
     elif 12 <= hour < 17:
