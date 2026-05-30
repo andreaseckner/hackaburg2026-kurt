@@ -1,0 +1,19 @@
+flutter_launcher_icons:
+  image_path: "assets/img/kurt.jpg"
+  android: false
+  ios: false
+  
+  web:
+    generate: true
+    image_path: "assets/img/kurt.jpg"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
+
+  macos:
+    generate: true
+    image_path: "assets/img/kurt.jpg"
+
+  windows:
+    generate: true
+    image_path: "assets/img/kurt.jpg"
+    icon_size: 48
